@@ -32,17 +32,17 @@ ADMIN_ID = int(os.environ["ADMIN_ID"])
 GIFT_PRICE_MIN = 200
 GIFT_PRICE_MAX = 250
 
+# تم حذف "الهمسات" وكل ما يتعلق بها تماماً بناءً على طلبك
 HUNT_KEYWORDS = [
     "مشاركة", "انضمام", "سحب", "دخول", "روليت", "هدية", "نجوم", "اضغط", "بسرعة", 
     "شارك", "انقر", "اضغط للانضمام", "انضم الآن", "سجل هنا", "التحق", "تأكيد", 
-    "تفاعل", "انقر هنا", "دخول السحب", "سجل اسمك", "join", "click", "participate",
-    "همسة", "همسه", "secret", "لأول شخص", "اقرأ", "أول من يضغط", "اقتناص"
+    "تفاعل", "انقر هنا", "دخول السحب", "سجل اسمك", "join", "click", "participate"
 ]
 DANGER_WORDS = ["أكثر نجوم", "من يضع", "تصويت بنجوم", "اكثر شخص يحط", "مزاد"]
 
 GIFT_MARKETS = ["Koda_7", "tonnel_network_bot", "AutoGiftsBot", "GiftHub_bot"]
 
-# كائنات الرسائل لوحة التحكم والبث الحي
+# كائنات الرسائل لوحة التحكم وبث الحي
 panel_msg = None
 live_log_msg = None
 
@@ -52,7 +52,7 @@ class TelethonOmegaSystem:
         self.client2 = TelegramClient(StringSession(SESSION_2), API_ID_2, API_HASH_2) if SESSION_2 else None
         
         self.running = True
-        self.sniper_enabled = True # التحكم بوضعية تشغيل أو إيقاف السكربت بالكامل
+        self.sniper_enabled = True 
         self.stats = {"wins": 0, "gifts_bought": 0, "msgs_processed": 0, "start_time": time.time()}
         self.last_scans = []
 
@@ -65,14 +65,15 @@ class TelethonOmegaSystem:
         uptime = str(timedelta(seconds=int(time.time() - self.stats['start_time'])))
         
         panel_text = (
-            f"🔥 **لوحة تحكم Omega Telethon الشبحية**\n"
+            f"🔥 **لوحة تحكم Omega Telethon المطورة**\n"
             f"-----------------------------------\n"
             f"🟢 الحالة العامة: نشط ومستمر 24/7\n"
             f"⏱️ مدة العمل المستمر: {uptime}\n"
-            f"🏆 فوز روليت ومسابقات وهمسات: {self.stats['wins']}\n"
+            f"🏆 فوز روليت ومسابقات: {self.stats['wins']}\n"
             f"💎 هدايا تم صيدها بنجاح: {self.stats['gifts_bought']}\n"
             f"📨 رسائل تم تحليلها: {self.stats['msgs_processed']}\n"
             f"🎯 نطاق الصيد المستهدف: {GIFT_PRICE_MIN} - {GIFT_PRICE_MAX} ⭐\n"
+            f"🛡️ صيد الهمسات: ❌ تم تعطيله وحذفه تماماً\n"
             f"⚙️ وضعية عمل السكربت الحالية: {'🟢 يعمل ويصطاد بنشاط' if self.sniper_enabled else '🔴 متوقف مؤقتاً عن الصيد'}"
         )
         
@@ -105,7 +106,6 @@ class TelethonOmegaSystem:
         await self.update_live_panel()
 
     async def process_message(self, client, event, account_tag):
-        # إذا قام المستخدم بإيقاف السكربت عبر الأمر، يتوقف فحص الرسائل تماماً هنا
         if not self.running or not self.sniper_enabled:
             return
             
@@ -196,7 +196,7 @@ class TelethonOmegaSystem:
                                 await self.log_scan_result(chat_title, detected_price, f"❌ خارج الميزانية ({detected_price}⭐)")
                                 return
 
-        # ---------------- 3. نظام الروليت والهمسات والمسابقات التلقائي ----------------
+        # ---------------- 3. نظام الروليت والمسابقات التلقائي البشري ----------------
         if event.buttons:
             for row in event.buttons:
                 for button in row:
@@ -205,14 +205,13 @@ class TelethonOmegaSystem:
                             await client.send_read_acknowledge(event.chat_id, max_id=event.id)
                         except: pass
                         
-                        is_whisper = any(w in text or w in button.text for w in ["همسة", "همسه", "secret", "أول شخص"])
-                        delay_time = random.uniform(1.2, 3.1) if is_whisper else random.uniform(5.2, 13.8)
-                        
+                        # نطاق التأخير العشوائي المطلوب لحمايتك من الشكوك (من 5 إلى 14 ثانية)
+                        delay_time = random.uniform(5.2, 13.8)
                         await asyncio.sleep(delay_time)
                         try:
                             await button.click()
                             self.stats['wins'] += 1
-                            await self.log_scan_result(chat_title, "روليت/همسة", f"🏆 تم التفاعل بنجاح خلال {delay_time:.2f} ثانية")
+                            await self.log_scan_result(chat_title, "روليت/مسابقة", f"🏆 تم التفاعل بنجاح خلال {delay_time:.2f} ثانية")
                             return
                         except: pass
 
@@ -224,9 +223,13 @@ class TelethonOmegaSystem:
             logger.info("🔄 جاري ربط الحساب الثاني بالتوازي...")
             await self.client2.start()
 
-        # ---------------- 4. استقبال وتنفيذ أوامر التحكم عن بُعد ----------------
-        @self.client1.on(events.NewMessage(from_users=ADMIN_ID, incoming=True))
+        # ---------------- 4. استقبال وتنفيذ أوامر التحكم (إصلاح شامل للأوامر) ----------------
+        @self.client1.on(events.NewMessage(chats=[ADMIN_ID, 'me'])) # الاستماع للمدير في الشات المباشر أو في الرسائل المحفوظة (me)
         async def admin_command_handler(event):
+            # التأكد أن مرسل الأمر هو أنت فقط بحسب المعرف لحماية السكربت
+            if event.sender_id != ADMIN_ID:
+                return
+                
             command = event.text.strip()
             
             if command == "/.توقف":
@@ -243,7 +246,7 @@ class TelethonOmegaSystem:
                 status = "شغال وبقوة 🟢" if self.sniper_enabled else "متوقف مؤقتاً 🔴"
                 await event.reply(f"ℹ️ **حالة القناص الحالية:** {status}")
 
-        # تشغيل مستمعي الأحداث للحسابين لقراءة القنوات والأسواق
+        # تشغيل مستمعي القنوات والأسواق للحسابين
         @self.client1.on(events.NewMessage())
         async def handler1(event):
             await self.process_message(self.client1, event, "الحساب الأول")
@@ -253,16 +256,15 @@ class TelethonOmegaSystem:
             async def handler2(event):
                 await self.process_message(self.client2, event, "الحساب الثاني")
 
-        # ---------------- 5. إرسال أزرار النسخ السريعة للرسائل المحفوظة ----------------
+        # ---------------- 5. إرسال الأوامر الجاهزة للمحفوظات ----------------
         commands_menu = (
-            "🛠️ **لوحة التحكم السريعة لقناص أوميجا**\n"
-            "اضغط على أي أمر أدناه وسيتم نسخه تلقائياً، قم بإرساله هنا للتحكم الكامل:\n\n"
+            "🛠️ **لوحة التحكم السريعة لقناص أوميجا (نسخة مصححة)**\n"
+            "اضغط على أي أمر أدناه وسيتم نسخه تلقائياً، أرسله هنا في المحفوظات للتحكم بالسكربت:\n\n"
             "`/.توقف` : لإيقاف صيد الهدايا والروليت والمسابقات فوراً.\n\n"
             "`/.تشغيل` : لإعادة تشغيل السكربت وجعله يصطاد مجدداً.\n\n"
-            "`/.فحص` : لمعرفة هل السكربت يعمل حالياً أم متوقف مؤقتاً."
+            "`/.فحص` : لمعرفة حالة السكربت الحالية هل هو نشط أم متوقف."
         )
         try:
-            # إرسال قائمة الأوامر التلقائية إلى الرسائل المحفوظة (Saved Messages) للحساب الأول
             await self.client1.send_message('me', commands_menu)
             logger.info("✅ تم إرسال قائمة الأوامر المخصصة إلى الرسائل المحفوظة بنجاح.")
         except Exception as e:
@@ -271,7 +273,7 @@ class TelethonOmegaSystem:
         await self.update_live_panel()
         logger.info("🚀 النظام نشط بالكامل ويستمع لأوامرك الآن.")
 
-        # وقت الدورة المستمر (5 ساعات و15 دقيقة) للتجديد التلقائي
+        # وقت الدورة المستمر (5 ساعات و15 ميت) للتجديد التلقائي
         await asyncio.sleep(18900)
         logger.info("🔄 نهاية الدورة الحالية بأمان لبدء الدورة التالية...")
         self.running = False
