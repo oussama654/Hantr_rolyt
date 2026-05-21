@@ -1,339 +1,285 @@
-import os
-import asyncio
-import re
-import logging
-import random
-import time
-from datetime import datetime, timedelta
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
-from telethon.errors import FloodWaitError
-from telethon.tl.functions.channels import JoinChannelRequest
-from telethon.tl.functions.messages import SendReactionRequest
-from telethon.tl.types import ReactionEmoji
 
-# ---------- إعدادات اللوجر ----------
+#!/usr/bin/env python3
+"""
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+Omega Ultimate Hunter – صائد الروليت المتكامل
+يتعامل مع الروليتات المتعددة الخطوات، الكابتشا، التوجيه، والأزرار الشفافة
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+"""
+import os, asyncio, random, re, time, logging, json
+from datetime import datetime, timedelta
+from telethon import TelegramClient, events, functions, types
+from telethon.sessions import StringSession
+from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
+from telethon.tl.functions.messages import GetMessagesRequest
+from telethon.errors import (
+    FloodWaitError, UserBannedInChannelError, PeerFloodError,
+    AuthKeyDuplicatedError, MessageDeleteForbiddenError
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler('omega_telethon.log'), logging.StreamHandler()]
+    handlers=[logging.FileHandler('ultimate_hunter.log'), logging.StreamHandler()]
 )
-logger = logging.getLogger("OmegaTelethon")
+logger = logging.getLogger("UltimateHunter")
 
-# ---------- جلب الإعدادات من GitHub Secrets ----------
-API_ID_1 = int(os.environ["API_ID_1"])
-API_HASH_1 = os.environ["API_HASH_1"]
-SESSION_1 = os.environ["SESSION_1"]
-
-API_ID_2 = int(os.environ.get("API_ID_2") or os.environ.get("API_ID_1"))
-API_HASH_2 = os.environ.get("API_HASH_2") or os.environ.get("API_HASH_1")
-SESSION_2 = os.environ.get("SESSION_2", "")
-
+# ---------- متغيرات البيئة ----------
+API_ID_1 = int(os.environ["API_ID_1"]); API_HASH_1 = os.environ["API_HASH_1"]; SESSION_1 = os.environ["SESSION_1"]
+API_ID_2 = int(os.environ.get("API_ID_2", 0)); API_HASH_2 = os.environ.get("API_HASH_2", ""); SESSION_2 = os.environ.get("SESSION_2", "")
 ADMIN_ID = int(os.environ["ADMIN_ID"])
 
-# ---------- إعدادات الأسعار المستهدفة للأسواق ----------
-GIFT_PRICE_MIN = 200
-GIFT_PRICE_MAX = 250
-
-# الكلمات المفتاحية للروليت والمسابقات (تم إقصاء وحظر "الهمسات" نهائياً)
 HUNT_KEYWORDS = [
-    "مشاركة", "انضمام", "سحب", "دخول", "روليت", "هدية", "نجوم", "اضغط", "بسرعة", 
-    "شارك", "انقر", "اضغط للانضمام", "انضم الآن", "سجل هنا", "التحق", "تأكيد", 
-    "تفاعل", "انقر هنا", "دخول السحب", "سجل اسمك", "المشاركة في السحب", "المشاركة في المسابقة",
-    "join", "click", "participate"
+    "مشاركة", "انضمام", "سحب", "دخول", "روليت", "هدية", "نجوم",
+    "يلا", "سجل", "اضغط", "بسرعة", "التحق", "تأكيد", "شارك", "انقر"
 ]
-DANGER_WORDS = ["أكثر نجوم", "من يضع", "تصويت بنجوم", "اكثر شخص يحط", "مزاد"]
-GIFT_MARKETS = ["Koda_7", "tonnel_network_bot", "AutoGiftsBot", "GiftHub_bot"]
+DANGER_WORDS = ["أكثر نجوم", "من يضع", "تصويت بنجوم", "اكثر شخص يحط", "يحط يربح", "مزاد نجوم"]
+SAFE_CONTEST_REGEX = r'أول\s*(شخص|واحد|من)\s*(ي|يلي)?\s*(كتب|يكتب|قال|يقول|رد|يرد|علق|يعلق)\s*[({\[].*?[)}\]]'
 
-panel_msg = None
-live_log_msg = None
+LEARNING_FILE = "ultimate_memory.json"
 
-class TelethonOmegaSystem:
+class UltimateHunter:
     def __init__(self):
-        self.client1 = TelegramClient(StringSession(SESSION_1), API_ID_1, API_HASH_1)
-        self.client2 = TelegramClient(StringSession(SESSION_2), API_ID_2, API_HASH_2) if SESSION_2 else None
-        
+        self.c1 = TelegramClient(StringSession(SESSION_1), API_ID_1, API_HASH_1)
+        self.c2 = TelegramClient(StringSession(SESSION_2), API_ID_2, API_HASH_2) if SESSION_2 else None
         self.running = True
-        self.sniper_enabled = True 
-        self.stats = {"wins": 0, "gifts_bought": 0, "msgs_processed": 0, "start_time": time.time()}
-        self.last_scans = []
+        self.stats = {"wins": 0, "tasks_done": 0, "channels_left": 0, "start": time.time()}
+        self.cache = set()
+        self.memory = self.load_memory()
+        self.pending_tasks = {}  # {original_msg_id: asyncio.Task}
 
-    async def update_live_panel(self):
-        """تحديث لوحة التحكم الفورية والشاملة للمدير"""
-        global panel_msg, live_log_msg
-        if not self.running:
-            return
-            
-        uptime = str(timedelta(seconds=int(time.time() - self.stats['start_time'])))
-        
-        panel_text = (
-            f"🔥 **لوحة تحكم Omega المحدثة للمسابقات والتعليقات**\n"
-            f"-----------------------------------\n"
-            f"🟢 الحالة العامة: نشط ومتصل 24/7\n"
-            f"⏱️ مدة العمل المستمر: {uptime}\n"
-            f"🏆 العمليات والمسابقات الناجحة: {self.stats['wins']}\n"
-            f"💎 صيد هدايا الأسواق: {self.stats['gifts_bought']}\n"
-            f"📨 رسائل تم تحليلها: {self.stats['msgs_processed']}\n"
-            f"⚙️ نظام مسابقات القلوب والتعليقات: ✅ مفعل تلقائياً\n"
-            f"🛡️ صيد الهمسات: ❌ تم حظره وتعطيله نهائياً بناءً على طلبك\n"
-            f"⚙️ وضعية السكربت الحالية: {'🟢 يعمل ويصطاد بنشاط' if self.sniper_enabled else '🔴 متوقف مؤقتاً عن الصيد'}"
-        )
-        
-        log_text = "🔍 **بث الفحص الحي والمهام التفاعلية (Live Scan):**\n-----------------------------------\n"
-        if not self.last_scans:
-            log_text += "⏳ بانتظار روليت أو مسابقة جديدة من قنوات سراب والأسواق..."
-        else:
-            for scan in self.last_scans[-5:]:
-                log_text += f"{scan}\n"
-
+    def load_memory(self):
         try:
-            if panel_msg:
-                await panel_msg.edit(panel_text)
-            else:
-                panel_msg = await self.client1.send_message(ADMIN_ID, panel_text)
+            with open(LEARNING_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {"delay_multiplier": 1.0, "bad_channels": []}
 
-            if live_log_msg:
-                await live_log_msg.edit(log_text)
-            else:
-                live_log_msg = await self.client1.send_message(ADMIN_ID, log_text)
+    def save_memory(self):
+        with open(LEARNING_FILE, 'w') as f:
+            json.dump(self.memory, f, indent=2)
+
+    async def learn(self, error, channel_id=None):
+        if isinstance(error, FloodWaitError):
+            self.memory['delay_multiplier'] = min(3.0, self.memory['delay_multiplier'] + 0.1)
+            self.save_memory()
+        elif isinstance(error, (UserBannedInChannelError, PeerFloodError)) and channel_id:
+            self.memory['bad_channels'].append(channel_id)
+            self.save_memory()
+
+    def is_bad(self, cid): return cid in self.memory['bad_channels']
+
+    def get_delay(self): return random.uniform(1.5 * self.memory['delay_multiplier'], 4.0 * self.memory['delay_multiplier'])
+
+    async def connect(self, client, name):
+        try:
+            await client.connect()
+            if await client.is_user_authorized():
+                logger.info(f"✅ {name}")
+                return True
+        except AuthKeyDuplicatedError:
+            logger.critical(f"🔑 {name} جلسة مكررة")
         except Exception as e:
-            logger.debug(f"خطأ تحديث اللوحة: {e}")
-
-    async def log_scan_result(self, chat_title, price, status_text):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        log_entry = f"⏱️ [{timestamp}] | 📍 {chat_title} | {status_text}"
-        self.last_scans.append(log_entry)
-        if len(self.last_scans) > 10:
-            self.last_scans.pop(0)
-        await self.update_live_panel()
-
-    async def handle_advanced_tasks(self, client, event, text, chat_title):
-        """التعامل الذكي مع مسابقات التوجيه، القلوب، والتعليقات المتقدمة"""
-        
-        # 1. إذا كانت المسابقة تطلب تعليق بكلمة معينة (مثل مسابقة "هل يستحق" أو "اكتب يستحق")
-        if "تعليق" in text or "التعليق" in text or "يستحق" in text:
-            # البحث عن الروابط المرفقة بالرسالة أو الأزرار التي توجه للشات
-            if event.buttons:
-                for row in event.buttons:
-                    for button in row:
-                        if button.url and "⚙️" not in button.text:
-                            # محاكاة تصفح بشري طبيعي قبل الانتقال
-                            await asyncio.sleep(random.uniform(2.5, 4.8))
-                            try:
-                                # كتابة كلمة "يستحق" تلقائياً كتعليق لتسجيل الصوت والاسم
-                                target_match = re.search(r't.me/[^/]+/(\d+)', button.url)
-                                if target_match:
-                                    await client.send_message(event.chat_id, "يستحق", comment_to=event.id)
-                                    await self.log_scan_result(chat_title, "تعليق", "✍️ تم التعليق بـ 'يستحق' تلقائياً بنجاح")
-                                    return True
-                            except Exception as e:
-                                logger.debug(f"فشل إرسال التعليق: {e}")
-
-        # 2. إذا كانت المسابقة تطلب التفاعل بقلب ❤️ والانضمام لقناة أخرى
-        if "❤️" in text or "قلب" in text or "تفاعل" in text:
-            if event.reply_markup:
-                for row in event.buttons:
-                    for button in row:
-                        if button.url and ("t.me/" in button.url or "tg://" in button.url):
-                            try:
-                                # استخراج اسم القناة من الرابط والاشتراك بها تلقائياً لمنع رفض الصوت
-                                channel_username = button.url.split('/')[-1].split('?')[0]
-                                if channel_username.isdigit(): 
-                                    continue
-                                    
-                                await asyncio.sleep(random.uniform(3.1, 5.5))
-                                await client(JoinChannelRequest(channel_username))
-                                
-                                # إرسال تفاعل القلب الأحمر ❤️ للمنشور الموجه لمحاكاة الحساب الحقيقي
-                                target_msg_id = int(button.url.split('/')[-1]) if button.url.split('/')[-1].isdigit() else None
-                                if target_msg_id:
-                                    await client(SendReactionRequest(
-                                        peer=channel_username,
-                                        msg_id=target_msg_id,
-                                        reaction=[ReactionEmoji(emoticon='❤️')]
-                                    ))
-                                await self.log_scan_result(chat_title, "تفاعل", f"❤️ تم الاشتراك في {channel_username} والتفاعل بـ قلب")
-                                return True
-                            except Exception as e:
-                                logger.debug(f"فشل نظام التفاعل التلقائي: {e}")
+            logger.error(f"❌ {name}: {e}")
         return False
 
-    async def process_message(self, client, event, account_tag):
-        if not self.running or not self.sniper_enabled:
-            return
-            
-        self.stats['msgs_processed'] += 1
-        text = event.text or ""
-        
-        # حظر الكلمات التي تدل على الهمسة بشكل قاطع وصارم
-        if any(w in text or w in (event.raw_text or "") for w in ["همسة", "همسه", "secret", "لأول شخص"]):
-            return
+    async def keep_alive(self, client, name):
+        while self.running:
+            try:
+                if not client.is_connected(): await client.connect()
+                await client(functions.PingRequest(ping_id=random.randint(0, 2**31)))
+            except: pass
+            await asyncio.sleep(120)
 
+    # ========== حل الكابتشا ==========
+    async def solve_captcha(self, event):
+        if not event.reply_markup: return False
+        text = event.raw_text or ""
+        # رياضيات
+        m = re.search(r'(\d+)\s*([+\-*/])\s*(\d+)', text)
+        if m:
+            res = str(eval(f"{m.group(1)}{m.group(2)}{m.group(3)}"))
+            for r, row in enumerate(event.reply_markup.rows):
+                for b, btn in enumerate(row.buttons):
+                    if btn.text.strip() == res:
+                        await event.click(r, b)
+                        return True
+        # إيموجي
+        em = re.search(r'\((.*?)\)', text)
+        if em:
+            target = em.group(1).strip()
+            for r, row in enumerate(event.reply_markup.rows):
+                for b, btn in enumerate(row.buttons):
+                    if target in btn.text:
+                        await event.click(r, b)
+                        return True
+        return False
+
+    # ========== إجراءات التوجيه ==========
+    async def follow_link(self, link, event, client):
+        """ينضم للقناة/المجموعة وينفذ المهمة المطلوبة"""
+        match = re.match(r'(?:https?://)?t\.me/([\w\d_]+)/?(\d+)?', link)
+        if not match: return
+        username, msg_id = match.group(1), match.group(2)
         try:
-            chat = await event.get_chat()
-            chat_title = getattr(chat, 'username', None) or getattr(chat, 'title', "قناة")
-        except:
-            chat_title = "قناة"
+            entity = await client.get_entity(username)
+            await client(JoinChannelRequest(entity))
+        except: pass
 
-        if any(word in text for word in DANGER_WORDS):
+        if msg_id:
+            try:
+                target_msg = await client.get_messages(entity, ids=int(msg_id))
+                if target_msg and target_msg.reply_markup:
+                    # ابحث عن زر تصويت أو قلب أو كتابة
+                    for row in target_msg.reply_markup.rows:
+                        for btn in row.buttons:
+                            if any(k in btn.text for k in ['❤️','👍','👎','تصويت','قلب','vote']):
+                                await target_msg.click(row.row_index, btn.column_index)
+                                return
+                    # إذا لم نجد زر، جرب النقر على أول زر
+                    await target_msg.click(0, 0)
+                elif target_msg and target_msg.is_reply:
+                    # ربما نحتاج كتابة "يستحق"
+                    try:
+                        await target_msg.reply("يستحق")
+                    except: pass
+            except Exception as e:
+                logger.warning(f"فشل تنفيذ مهمة في {username}: {e}")
+
+    # ========== المعالج الرئيسي ==========
+    async def handle_message(self, event, client):
+        if not self.running: return
+        chat = await event.get_chat()
+        chat_id = chat.id
+        if self.is_bad(chat_id): return
+
+        text = event.raw_text or ""
+        if any(w in text for w in DANGER_WORDS): return
+
+        # مسابقة آمنة
+        safe = re.search(SAFE_CONTEST_REGEX, text, re.I)
+        if safe:
+            reply_text = re.search(r'[({\[].*?[)}\]]', text)
+            reply_text = reply_text.group(0).strip('(){}[]') if reply_text else "تم"
+            try: await event.reply(reply_text)
+            except: pass
+            if event.reply_markup: await self.process_buttons(event, client, chat_id)
             return
 
-        # ---------------- 1. نظام صيد وتخطي كابتشا الإيموجي والعمليات الحسابية ----------------
-        if event.buttons:
-            # كابتشا العمليات الحسابية
-            math_match = re.search(r'(\d+)\s*([\+\-\*])\s*(\d+)', text)
-            if math_match:
-                num1 = int(math_match.group(1))
-                op = math_match.group(2)
-                num2 = int(math_match.group(3))
-                result = num1 + num2 if op == '+' else (num1 - num2 if op == '-' else num1 * num2)
-                
-                for row in event.buttons:
-                    for button in row:
-                        if str(result) in button.text:
-                            try: await client.send_read_acknowledge(event.chat_id, max_id=event.id)
-                            except: pass
-                            await asyncio.sleep(random.uniform(4.1, 6.7))
-                            try:
-                                await button.click()
-                                await self.log_scan_result(chat_title, "كابتشا", f"✅ تم فك الكابتشا الحسابية: {result}")
-                                return
-                            except: pass
+        if event.id in self.cache: return
 
-            # كابتشا الإيموجي (مثل الصورة رقم 6 تماماً: اضغط على الزر اللي يشبه هذا الإيموجي)
-            for row in event.buttons:
-                for button in row:
-                    btn_txt = button.text.strip()
-                    if len(btn_txt) <= 2 and btn_txt in text:
-                        if any(phrase in text for phrase in ["اضغط على", "اختر", "انقر", "يشبه", "click", "choose"]):
-                            try: await client.send_read_acknowledge(event.chat_id, max_id=event.id)
-                            except: pass
-                            await asyncio.sleep(random.uniform(3.5, 5.9))
-                            try:
-                                await button.click()
-                                await self.log_scan_result(chat_title, "كابتشا", f"✅ تم تخطي كابتشا الإيموجي المطابق: {btn_txt}")
-                                return
-                            except: pass
-
-        # ---------------- 2. معالجة المسابقات المتقدمة والقلوب أولاً ----------------
-        is_advanced_done = await self.handle_advanced_tasks(client, event, text, chat_title)
-
-        # ---------------- 3. نظام صيد الهدايا الفوري من الأسواق ----------------
-        is_market = any(m in str(chat_title) for m in GIFT_MARKETS)
-        has_gift_link = any(link in text for link in ["t.me/nft/", "tg://nft", "t.me/gift/"])
-        
-        if is_market or has_gift_link:
-            detected_price = None
-            price_match = re.search(r'(\d+)\s*(🌟|نجمة|star|stars|⭐)', text, re.I)
-            if price_match:
-                detected_price = int(price_match.group(1))
-
-            if event.buttons:
-                for row in event.buttons:
-                    for button in row:
-                        if any(k in button.text.lower() for k in ['شراء', 'اشتري', 'buy', 'purchase', 'get', '💎']):
-                            if not detected_price:
-                                btn_price = re.search(r'(\d+)', button.text)
-                                if btn_price: detected_price = int(btn_price.group(1))
-                            
-                            if detected_price and GIFT_PRICE_MIN <= detected_price <= GIFT_PRICE_MAX:
-                                try: await client.send_read_acknowledge(event.chat_id, max_id=event.id)
-                                except: pass
-                                await asyncio.sleep(random.uniform(0.02, 0.09))
-                                try:
-                                    await button.click()
-                                    self.stats['gifts_bought'] += 1
-                                    await self.log_scan_result(chat_title, detected_price, f"🚀 [صيد هدية ناجح بسعر {detected_price}⭐]")
-                                    await self.client1.send_message(ADMIN_ID, f"🎉 **[{account_tag}] قنص هدية!**\n💰 السعر: {detected_price}⭐")
-                                    return
-                                except FloodWaitError as e:
-                                    await asyncio.sleep(e.seconds + 1)
-                                except Exception as e:
-                                    await self.log_scan_result(chat_title, detected_price, f"❌ فشل الصيد: {str(e)[:15]}")
-
-        # ---------------- 4. نظام الروليت والمسابقات التلقائي البشري ----------------
-        if event.buttons:
-            for row in event.buttons:
-                for button in row:
-                    if any(keyword in button.text.lower() for keyword in HUNT_KEYWORDS):
-                        try: await client.send_read_acknowledge(event.chat_id, max_id=event.id)
-                        except: pass
-                        
-                        # نطاق الوقت البشري العشوائي لمنع الشكوك (من 5 إلى 14 ثانية للروليت والمسابقات)
-                        delay_time = random.uniform(5.2, 13.9)
-                        await asyncio.sleep(delay_time)
-                        try:
-                            await button.click()
-                            self.stats['wins'] += 1
-                            await self.log_scan_result(chat_title, "روليت", f"🏆 تم الاشتراك التلقائي بنجاح خلال {delay_time:.2f} ثانية")
-                            return
-                        except: pass
-
-    async def start_system(self):
-        logger.info("🔄 جاري بدء النظام الشبح المتكامل بمكتبة Telethon...")
-        await self.client1.start()
-        
-        if self.client2:
-            logger.info("🔄 جاري ربط الحساب الثاني بالتوازي...")
-            await self.client2.start()
-
-        # ---------------- 5. نظام الأوامر الفوري (مصحح وشغال 100%) ----------------
-        @self.client1.on(events.NewMessage(incoming=True))
-        async def admin_command_handler(event):
-            # الكشف والقبول الفوري للأوامر إذا أرسلتها لنفسك في الرسائل المحفوظة أو الشات المباشر
-            if event.sender_id != ADMIN_ID:
+        # فحص الأزرار
+        if event.reply_markup:
+            # أولاً حل كابتشا إن وجد
+            if await self.solve_captcha(event):
+                self.cache.add(event.id)
                 return
-                
-            command = event.text.strip()
-            
-            if command == "/.توقف":
-                self.sniper_enabled = False
-                await event.reply("🔴 **تم إيقاف قناص أوميجا والمسابقات مؤقتاً بنجاح.**")
-                await self.update_live_panel()
-                
-            elif command == "/.تشغيل":
-                self.sniper_enabled = True
-                await event.reply("🟢 **تم إعادة تفعيل القناص والمسابقات.. السكربت يصطاد الآن!**")
-                await self.update_live_panel()
-                
-            elif command == "/.فحص":
-                status = "شغال وبقوة 🟢" if self.sniper_enabled else "متوقف مؤقتاً 🔴"
-                await event.reply(f"ℹ️ **حالة القناص الحالية:** {status}")
 
-        # تشغيل مستمعي القنوات والأسواق للحسابين بالتوازي
-        @self.client1.on(events.NewMessage())
-        async def handler1(event):
-            await self.process_message(self.client1, event, "الحساب الأول")
+            # استخراج روابط التوجيه
+            redirect_links = []
+            for row in event.reply_markup.rows:
+                for btn in row.buttons:
+                    if btn.url and 't.me' in btn.url:
+                        redirect_links.append(btn.url)
+                    elif 'هنا' in btn.text or 'قناة' in btn.text or 'اذهب' in btn.text:
+                        # زر توجيه بدون رابط واضح، قد يكون callback يفتح شيء
+                        # نضغطه ونراقب النتيجة
+                        try:
+                            await event.click(row.row_index, btn.column_index)
+                            await asyncio.sleep(2)
+                            # بعد النقر قد تظهر رسالة جديدة أو ننتقل
+                            # نعود للرسالة الأصلية بعد قليل
+                        except: pass
+                        return
 
-        if self.client2:
-            @self.client2.on(events.NewMessage())
-            async def handler2(event):
-                await self.process_message(self.client2, event, "الحساب الثاني")
+            # إذا وجدنا روابط توجيه
+            for link in redirect_links:
+                await self.follow_link(link, event, client)
+                await asyncio.sleep(2)
+                # بعد تنفيذ المهمة، نعود للرسالة الأصلية ونضغط أزرارها
+                try:
+                    original = await client.get_messages(chat_id, ids=event.id)
+                    if original and original.reply_markup:
+                        await self.click_hunt_buttons(original, client, chat_id)
+                except: pass
+                return
 
-        # إرسال قائمة الأزرار الذكية لتنسخ بنقرة واحدة من رسائلك المحفوظة
-        commands_menu = (
-            "🛠️ **لوحة التحكم الشبحية الفورية (نسخة مسابقات سراب)**\n"
-            "اضغط على الأمر المطلوب ليتم نسخه، ثم قم بإرساله فوراً في الشات للتحكم بالسكربت:\n\n"
-            "`/.توقف` : لإيقاف صيد الهدايا والمسابقات والتعليقات فوراً.\n\n"
-            "`/.تشغيل` : لإعادة تشغيل السكربت وجعله يصطاد مجدداً.\n\n"
-            "`/.فحص` : لمعرفة حالة السكربت الحالية هل هو نشط أم متوقف."
-        )
+            # روليت عادي
+            if any(k in (text + " ".join(b.text for r in event.reply_markup.rows for b in r.buttons)).lower() for k in HUNT_KEYWORDS):
+                self.cache.add(event.id)
+                await self.join_channels(event, client)
+                delay = self.get_delay()
+                await asyncio.sleep(delay)
+                await self.click_hunt_buttons(event, client, chat_id)
+
+    async def click_hunt_buttons(self, event, client, chat_id):
+        if not event.reply_markup: return
+        for row in event.reply_markup.rows:
+            for btn in row.buttons:
+                if any(k in btn.text for k in HUNT_KEYWORDS) or "مشاركة" in btn.text or "انضم" in btn.text:
+                    try:
+                        await event.click(row.row_index, btn.column_index)
+                        self.stats['wins'] += 1
+                        return
+                    except FloodWaitError as e:
+                        await self.learn(e)
+                        await asyncio.sleep(e.seconds + 1)
+                    except (UserBannedInChannelError, PeerFloodError) as e:
+                        await self.learn(e, chat_id)
+                        try: await client(LeaveChannelRequest(chat_id))
+                        except: pass
+                        self.stats['channels_left'] += 1
+                    except: pass
+        # لو مافيش زر مناسب، نضغط أول زر (شفاف)
         try:
-            await self.client1.send_message('me', commands_menu)
-            logger.info("✅ تم إرسال الأوامر الجاهزة لرسائلك المحفوظة.")
-        except Exception as e:
-            logger.error(f"فشل إرسال الأوامر للمحفوظة: {e}")
+            await event.click(0, 0)
+            self.stats['wins'] += 1
+        except: pass
 
-        await self.update_live_panel()
-        
-        # الحفاظ على تشغيل السكربت ودورته المستمرة في خلفية GitHub Actions بأمان
-        await asyncio.sleep(18900)
-        self.running = False
-        await self.client1.disconnect()
-        if self.client2:
-            await self.client2.disconnect()
+    async def join_channels(self, event, client):
+        links = set()
+        if event.entities:
+            for e in event.entities:
+                if hasattr(e, 'url') and 't.me' in (e.url or ''):
+                    links.add(e.url)
+        links.update(re.findall(r'(?:t\.me/[\w\d_]+|@[\w\d_]+)', event.raw_text))
+        for l in links:
+            name = l.split('/')[-1].replace('@', '')
+            try: await client(JoinChannelRequest(name))
+            except: pass
+
+    # ========== أوامر ==========
+    async def handle_command(self, event):
+        cmd = event.raw_text[1:].lower()
+        if cmd == "stop": self.running = False; await event.reply("🛑 توقف")
+        elif cmd == "start": self.running = True; await event.reply("✅ تشغيل")
+        elif cmd == "stats":
+            up = str(timedelta(seconds=int(time.time()-self.stats['start'])))
+            await event.reply(f"📊 صيد: {self.stats['wins']}\n⏱️ {up}\n🐌 تأخير: {self.memory['delay_multiplier']:.2f}")
+
+    # ========== تشغيل ==========
+    async def main(self):
+        if not await self.connect(self.c1, "ح1"): return
+        if self.c2 and not await self.connect(self.c2, "ح2"): self.c2 = None
+
+        @self.c1.on(events.NewMessage)
+        async def h1(e):
+            if e.sender_id == ADMIN_ID and e.raw_text.startswith("."):
+                await self.handle_command(e)
+            elif e.is_channel or e.is_group:
+                await self.handle_message(e, self.c1)
+
+        if self.c2:
+            @self.c2.on(events.NewMessage)
+            async def h2(e):
+                if e.is_channel or e.is_group:
+                    await self.handle_message(e, self.c2)
+
+        asyncio.create_task(self.keep_alive(self.c1, "ح1"))
+        if self.c2: asyncio.create_task(self.keep_alive(self.c2, "ح2"))
+
+        logger.info("🚀 Ultimate Hunter انطلق")
+        await self.c1.run_until_disconnected()
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(TelethonOmegaSystem().start_system())
-
+    asyncio.run(UltimateHunter().main())
