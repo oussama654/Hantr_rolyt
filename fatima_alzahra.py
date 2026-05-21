@@ -1,34 +1,38 @@
-
 #!/usr/bin/env python3
 """
-■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
-Omega Ultimate Hunter – صائد الروليت المتكامل
-يتعامل مع الروليتات المتعددة الخطوات، الكابتشا، التوجيه، والأزرار الشفافة
-■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+Omega VPS Hunter – صائد الـ VPS + روليت 24/7
+يراقب قناة FreeinternetTM ويسحب بيانات VPS بسرعة البرق
+يدير حسابين | لوحة تحكم حية | أوامر تحكم كاملة
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
 """
 import os, asyncio, random, re, time, logging, json
 from datetime import datetime, timedelta
-from telethon import TelegramClient, events, functions, types
+from telethon import TelegramClient, events, functions, types, Button
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
-from telethon.tl.functions.messages import GetMessagesRequest
+from telethon.tl.functions.account import UpdateStatusRequest, UpdateProfileRequest
 from telethon.errors import (
     FloodWaitError, UserBannedInChannelError, PeerFloodError,
-    AuthKeyDuplicatedError, MessageDeleteForbiddenError
+    AuthKeyDuplicatedError
 )
 
+# ---------- إعداد السجلات ----------
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler('ultimate_hunter.log'), logging.StreamHandler()]
+    handlers=[logging.FileHandler('omega_vps_hunter.log'), logging.StreamHandler()]
 )
-logger = logging.getLogger("UltimateHunter")
+logger = logging.getLogger("OmegaVPS")
 
 # ---------- متغيرات البيئة ----------
 API_ID_1 = int(os.environ["API_ID_1"]); API_HASH_1 = os.environ["API_HASH_1"]; SESSION_1 = os.environ["SESSION_1"]
 API_ID_2 = int(os.environ.get("API_ID_2", 0)); API_HASH_2 = os.environ.get("API_HASH_2", ""); SESSION_2 = os.environ.get("SESSION_2", "")
 ADMIN_ID = int(os.environ["ADMIN_ID"])
+TARGET_CHANNEL = "FreeinternetTM"      # القناة التي نراقبها
+NOTIFY_USER = "KOA_7"                  # الحساب الذي تصل إليه بيانات VPS (يمكن تغييره إلى @Pro)
 
+# كلمات الصيد
 HUNT_KEYWORDS = [
     "مشاركة", "انضمام", "سحب", "دخول", "روليت", "هدية", "نجوم",
     "يلا", "سجل", "اضغط", "بسرعة", "التحق", "تأكيد", "شارك", "انقر"
@@ -36,18 +40,24 @@ HUNT_KEYWORDS = [
 DANGER_WORDS = ["أكثر نجوم", "من يضع", "تصويت بنجوم", "اكثر شخص يحط", "يحط يربح", "مزاد نجوم"]
 SAFE_CONTEST_REGEX = r'أول\s*(شخص|واحد|من)\s*(ي|يلي)?\s*(كتب|يكتب|قال|يقول|رد|يرد|علق|يعلق)\s*[({\[].*?[)}\]]'
 
-LEARNING_FILE = "ultimate_memory.json"
+# ملف التعلم
+LEARNING_FILE = "omega_vps_memory.json"
+STATS_MSG_ID = None   # رسالة الإحصائيات الحية في المحفوظات
 
-class UltimateHunter:
+class OmegaVPSHunter:
     def __init__(self):
         self.c1 = TelegramClient(StringSession(SESSION_1), API_ID_1, API_HASH_1)
         self.c2 = TelegramClient(StringSession(SESSION_2), API_ID_2, API_HASH_2) if SESSION_2 else None
         self.running = True
-        self.stats = {"wins": 0, "tasks_done": 0, "channels_left": 0, "start": time.time()}
+        self.stats = {
+            "vps_captured": 0, "wins": 0, "channels_left": 0,
+            "start": time.time()
+        }
         self.cache = set()
         self.memory = self.load_memory()
-        self.pending_tasks = {}  # {original_msg_id: asyncio.Task}
+        self.main_client = None  # يُستخدم للإحصائيات وإرسال التنبيهات
 
+    # ---------- ذاكرة التعلم ----------
     def load_memory(self):
         try:
             with open(LEARNING_FILE, 'r') as f:
@@ -59,7 +69,7 @@ class UltimateHunter:
         with open(LEARNING_FILE, 'w') as f:
             json.dump(self.memory, f, indent=2)
 
-    async def learn(self, error, channel_id=None):
+    async def learn_from_error(self, error, channel_id=None):
         if isinstance(error, FloodWaitError):
             self.memory['delay_multiplier'] = min(3.0, self.memory['delay_multiplier'] + 0.1)
             self.save_memory()
@@ -69,27 +79,95 @@ class UltimateHunter:
 
     def is_bad(self, cid): return cid in self.memory['bad_channels']
 
-    def get_delay(self): return random.uniform(1.5 * self.memory['delay_multiplier'], 4.0 * self.memory['delay_multiplier'])
+    def get_delay(self):
+        return random.uniform(1.5 * self.memory['delay_multiplier'], 4.0 * self.memory['delay_multiplier'])
 
+    # ========== اتصال ==========
     async def connect(self, client, name):
-        try:
-            await client.connect()
-            if await client.is_user_authorized():
-                logger.info(f"✅ {name}")
-                return True
-        except AuthKeyDuplicatedError:
-            logger.critical(f"🔑 {name} جلسة مكررة")
-        except Exception as e:
-            logger.error(f"❌ {name}: {e}")
+        for _ in range(3):
+            try:
+                await client.connect()
+                if await client.is_user_authorized():
+                    logger.info(f"✅ {name}")
+                    return True
+            except AuthKeyDuplicatedError:
+                logger.critical(f"🔑 {name} الجلسة مكررة! أوقف أي تشغيل آخر.")
+                break
+            except Exception as e:
+                logger.error(f"❌ {name}: {e}")
+            await asyncio.sleep(10)
         return False
 
     async def keep_alive(self, client, name):
         while self.running:
             try:
-                if not client.is_connected(): await client.connect()
-                await client(functions.PingRequest(ping_id=random.randint(0, 2**31)))
-            except: pass
+                if not client.is_connected():
+                    await client.connect()
+                await client(UpdateStatusRequest(offline=False))
+            except:
+                pass
             await asyncio.sleep(120)
+
+    # ========== إحصائيات حية (رسالة واحدة في المحفوظات) ==========
+    async def update_stats_msg(self):
+        global STATS_MSG_ID
+        if not self.main_client:
+            return
+        uptime = str(timedelta(seconds=int(time.time() - self.stats['start'])))
+        msg = (
+            f"📊 **Omega VPS Hunter**\n"
+            f"🕒 {datetime.now().strftime('%H:%M:%S')}\n"
+            f"⏱️ مدة: {uptime}\n"
+            f"🌐 VPS تم اصطيادها: {self.stats['vps_captured']}\n"
+            f"🏆 روليت: {self.stats['wins']}\n"
+            f"🚪 قنوات غادرت: {self.stats['channels_left']}\n"
+            f"🐌 مضاعف التأخير: {self.memory['delay_multiplier']:.2f}\n"
+            f"🟢 الحالة: {'يعمل' if self.running else 'متوقف'}"
+        )
+        try:
+            if STATS_MSG_ID:
+                await self.main_client.edit_message('me', STATS_MSG_ID, msg)
+            else:
+                sent = await self.main_client.send_message('me', msg)
+                STATS_MSG_ID = sent.id
+        except:
+            pass
+
+    # ========== مراقبة قناة الـ VPS ==========
+    async def vps_watcher(self, event):
+        """استخراج بيانات VPS من رسالة وإرسالها إلى المستخدم"""
+        text = event.raw_text or ""
+        # نمط regex متسامح لاستخراج IP, User, Password
+        ip = re.search(r'(?:IP[:\s]*|🌐\s*IP[:\s]*)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', text)
+        user = re.search(r'(?:User[:\s]*|👤\s*User[:\s]*)(\S+)', text)
+        pwd = re.search(r'(?:New password[:\s]*|🔐\s*New password[:\s]*|password[:\s]*)(\S+)', text)
+
+        if ip and user and pwd:
+            ip_val = ip.group(1)
+            user_val = user.group(1)
+            pwd_val = pwd.group(1)
+            # تجنب الإرسال إذا كانت البيانات مكررة (اختياري)
+            self.stats['vps_captured'] += 1
+            await self.update_stats_msg()
+
+            # إرسال إلى المستخدم المحدد مع أزرار نسخ
+            msg = (
+                f"🌐 **VPS جديد تم اصطياده!**\n"
+                f"▪️ IP: `{ip_val}`\n"
+                f"▪️ User: `{user_val}`\n"
+                f"▪️ Password: `{pwd_val}`"
+            )
+            try:
+                await self.main_client.send_message(
+                    NOTIFY_USER, msg,
+                    buttons=[
+                        [Button.inline("📋 نسخ IP", f"copy_{ip_val}"),
+                         Button.inline("📋 نسخ كلمة السر", f"copy_{pwd_val}")]
+                    ]
+                )
+                logger.info(f"✅ تم إرسال VPS {ip_val} إلى {NOTIFY_USER}")
+            except Exception as e:
+                logger.error(f"فشل إرسال VPS: {e}")
 
     # ========== حل الكابتشا ==========
     async def solve_captcha(self, event):
@@ -115,39 +193,55 @@ class UltimateHunter:
                         return True
         return False
 
-    # ========== إجراءات التوجيه ==========
-    async def follow_link(self, link, event, client):
-        """ينضم للقناة/المجموعة وينفذ المهمة المطلوبة"""
-        match = re.match(r'(?:https?://)?t\.me/([\w\d_]+)/?(\d+)?', link)
+    # ========== تنفيذ إجراءات التوجيه (قنوات، تصويت، كتابة) ==========
+    async def follow_redirects(self, event, client):
+        """يتابع الأزرار التي توجه إلى قنوات أو تتطلب كتابة تعليق أو تصويت"""
+        if not event.reply_markup: return
+        for row in event.reply_markup.rows:
+            for btn in row.buttons:
+                # أزرار تحوي روابط
+                if btn.url and 't.me' in btn.url:
+                    await self.handle_redirect_link(btn.url, client)
+                    return
+                # أزرار مثل "هنا" أو "قناة" (callback قد يفتح توجيه)
+                if any(w in btn.text for w in ['هنا', 'قناة', 'انضم', 'اضغط']):
+                    try:
+                        await event.click(row.row_index, btn.column_index)
+                        await asyncio.sleep(2)
+                        # بعد النقر قد نظهر رسالة جديدة، لا نستطيع متابعتها آلياً بسهولة
+                        # لكن سنحاول العودة للرسالة الأصلية وننقر أزرارها
+                        return
+                    except: pass
+
+    async def handle_redirect_link(self, url, client):
+        """الانضمام لقناة وإجراء التصويت المطلوب"""
+        match = re.match(r'(?:https?://)?t\.me/([\w\d_]+)/?(\d+)?', url)
         if not match: return
         username, msg_id = match.group(1), match.group(2)
         try:
             entity = await client.get_entity(username)
             await client(JoinChannelRequest(entity))
-        except: pass
-
-        if msg_id:
-            try:
+            if msg_id:
                 target_msg = await client.get_messages(entity, ids=int(msg_id))
                 if target_msg and target_msg.reply_markup:
-                    # ابحث عن زر تصويت أو قلب أو كتابة
+                    # نبحث عن زر تصويت (قلب، 👍…)
                     for row in target_msg.reply_markup.rows:
                         for btn in row.buttons:
-                            if any(k in btn.text for k in ['❤️','👍','👎','تصويت','قلب','vote']):
+                            if any(k in btn.text for k in ['❤️','👍','👎','تصويت','vote']):
                                 await target_msg.click(row.row_index, btn.column_index)
                                 return
-                    # إذا لم نجد زر، جرب النقر على أول زر
+                    # وإلا نضغط أول زر
                     await target_msg.click(0, 0)
-                elif target_msg and target_msg.is_reply:
+                elif target_msg:
                     # ربما نحتاج كتابة "يستحق"
                     try:
                         await target_msg.reply("يستحق")
                     except: pass
-            except Exception as e:
-                logger.warning(f"فشل تنفيذ مهمة في {username}: {e}")
+        except Exception as e:
+            logger.warning(f"فشل في معالجة رابط التوجيه {url}: {e}")
 
-    # ========== المعالج الرئيسي ==========
-    async def handle_message(self, event, client):
+    # ========== المعالج الرئيسي للروليت ==========
+    async def handle_roulette(self, event, client):
         if not self.running: return
         chat = await event.get_chat()
         chat_id = chat.id
@@ -163,80 +257,70 @@ class UltimateHunter:
             reply_text = reply_text.group(0).strip('(){}[]') if reply_text else "تم"
             try: await event.reply(reply_text)
             except: pass
-            if event.reply_markup: await self.process_buttons(event, client, chat_id)
+            if event.reply_markup:
+                await self.process_buttons(event, client, chat_id)
             return
 
         if event.id in self.cache: return
 
-        # فحص الأزرار
         if event.reply_markup:
-            # أولاً حل كابتشا إن وجد
+            # حل كابتشا أولاً
             if await self.solve_captcha(event):
                 self.cache.add(event.id)
                 return
 
-            # استخراج روابط التوجيه
-            redirect_links = []
-            for row in event.reply_markup.rows:
-                for btn in row.buttons:
-                    if btn.url and 't.me' in btn.url:
-                        redirect_links.append(btn.url)
-                    elif 'هنا' in btn.text or 'قناة' in btn.text or 'اذهب' in btn.text:
-                        # زر توجيه بدون رابط واضح، قد يكون callback يفتح شيء
-                        # نضغطه ونراقب النتيجة
-                        try:
-                            await event.click(row.row_index, btn.column_index)
-                            await asyncio.sleep(2)
-                            # بعد النقر قد تظهر رسالة جديدة أو ننتقل
-                            # نعود للرسالة الأصلية بعد قليل
-                        except: pass
-                        return
+            # ابحث عن أزرار توجيه (ذات روابط)
+            btn_texts = [btn.text for row in event.reply_markup.rows for btn in row.buttons]
+            has_redirect = any('t.me' in (btn.url or '') for row in event.reply_markup.rows for btn in row.buttons)
 
-            # إذا وجدنا روابط توجيه
-            for link in redirect_links:
-                await self.follow_link(link, event, client)
+            if has_redirect or any(w in btn_texts for w in ['هنا', 'قناة', 'تصويت', 'علق']):
+                await self.follow_redirects(event, client)
+                # بعد تنفيذ التوجيه، نعود ونضغط أزرار الصيد
                 await asyncio.sleep(2)
-                # بعد تنفيذ المهمة، نعود للرسالة الأصلية ونضغط أزرارها
                 try:
-                    original = await client.get_messages(chat_id, ids=event.id)
-                    if original and original.reply_markup:
-                        await self.click_hunt_buttons(original, client, chat_id)
+                    # نعيد جلب الرسالة الأصلية
+                    fresh = await client.get_messages(chat_id, ids=event.id)
+                    if fresh and fresh.reply_markup:
+                        await self.click_hunt(fresh, client, chat_id)
                 except: pass
                 return
 
             # روليت عادي
-            if any(k in (text + " ".join(b.text for r in event.reply_markup.rows for b in r.buttons)).lower() for k in HUNT_KEYWORDS):
+            if any(k in (text + " ".join(btn_texts)).lower() for k in HUNT_KEYWORDS):
                 self.cache.add(event.id)
-                await self.join_channels(event, client)
+                await self.join_required(event, client)
                 delay = self.get_delay()
                 await asyncio.sleep(delay)
-                await self.click_hunt_buttons(event, client, chat_id)
+                await self.click_hunt(event, client, chat_id)
 
-    async def click_hunt_buttons(self, event, client, chat_id):
+    async def click_hunt(self, event, client, chat_id):
         if not event.reply_markup: return
         for row in event.reply_markup.rows:
             for btn in row.buttons:
-                if any(k in btn.text for k in HUNT_KEYWORDS) or "مشاركة" in btn.text or "انضم" in btn.text:
+                if any(k in btn.text for k in HUNT_KEYWORDS) or "مشاركة" in btn.text:
                     try:
                         await event.click(row.row_index, btn.column_index)
                         self.stats['wins'] += 1
+                        if self.stats['wins'] % 10 == 0:
+                            self.memory['delay_multiplier'] = max(0.8, self.memory['delay_multiplier'] - 0.05)
+                            self.save_memory()
                         return
                     except FloodWaitError as e:
-                        await self.learn(e)
+                        await self.learn_from_error(e)
                         await asyncio.sleep(e.seconds + 1)
                     except (UserBannedInChannelError, PeerFloodError) as e:
-                        await self.learn(e, chat_id)
+                        await self.learn_from_error(e, chat_id)
                         try: await client(LeaveChannelRequest(chat_id))
                         except: pass
                         self.stats['channels_left'] += 1
                     except: pass
-        # لو مافيش زر مناسب، نضغط أول زر (شفاف)
+        # زر شفاف/أي زر متبقٍ
         try:
             await event.click(0, 0)
             self.stats['wins'] += 1
         except: pass
 
-    async def join_channels(self, event, client):
+    async def join_required(self, event, client):
         links = set()
         if event.entities:
             for e in event.entities:
@@ -248,38 +332,110 @@ class UltimateHunter:
             try: await client(JoinChannelRequest(name))
             except: pass
 
+    # ========== تنظيف القنوات الميتة ==========
+    async def leave_dead_channels(self):
+        count = 0
+        clients = [self.c1] if not self.c2 else [self.c1, self.c2]
+        for client in clients:
+            async for d in client.iter_dialogs():
+                if not d.is_channel: continue
+                try:
+                    msgs = await client.get_messages(d.entity, limit=1)
+                    if not msgs or not msgs[0].date:
+                        await client(LeaveChannelRequest(d.entity))
+                        count += 1
+                except: pass
+        self.stats['channels_left'] += count
+        if count: logger.info(f"🧹 غادرت {count} قناة ميتة")
+
     # ========== أوامر ==========
-    async def handle_command(self, event):
-        cmd = event.raw_text[1:].lower()
-        if cmd == "stop": self.running = False; await event.reply("🛑 توقف")
-        elif cmd == "start": self.running = True; await event.reply("✅ تشغيل")
+    async def handle_command(self, event, parts):
+        cmd = parts[0][1:].lower()
+        if cmd == "stop":
+            self.running = False
+            await event.reply("🛑 تم إيقاف المحرك")
+        elif cmd == "start":
+            self.running = True
+            await event.reply("✅ تم تشغيل المحرك")
         elif cmd == "stats":
-            up = str(timedelta(seconds=int(time.time()-self.stats['start'])))
-            await event.reply(f"📊 صيد: {self.stats['wins']}\n⏱️ {up}\n🐌 تأخير: {self.memory['delay_multiplier']:.2f}")
+            await self.update_stats_msg()
+            await event.reply("✅ تم تحديث الإحصائيات")
+        elif cmd == "leavedead":
+            await self.leave_dead_channels()
+            await event.reply("🧹 تم تنظيف القنوات الميتة")
+        elif cmd == "panel":
+            btns = [
+                [Button.inline("📊 إحصائيات", b"copy_stats"),
+                 Button.inline("🛑 إيقاف", b"copy_stop"),
+                 Button.inline("✅ تشغيل", b"copy_start")],
+                [Button.inline("🧹 مغادرة الميتة", b"copy_leavedead")]
+            ]
+            await event.respond("🔥 **Omega VPS Hunter**", buttons=btns)
 
     # ========== تشغيل ==========
     async def main(self):
-        if not await self.connect(self.c1, "ح1"): return
-        if self.c2 and not await self.connect(self.c2, "ح2"): self.c2 = None
+        if not await self.connect(self.c1, "حساب 1"): return
+        self.main_client = self.c1
+        if self.c2 and not await self.connect(self.c2, "حساب 2"): self.c2 = None
 
-        @self.c1.on(events.NewMessage)
-        async def h1(e):
-            if e.sender_id == ADMIN_ID and e.raw_text.startswith("."):
-                await self.handle_command(e)
-            elif e.is_channel or e.is_group:
-                await self.handle_message(e, self.c1)
+        # ---------- مستمعات ----------
+        # 1. مراقبة قناة الـ VPS (حساب 1)
+        @self.c1.on(events.NewMessage(chats=TARGET_CHANNEL))
+        async def vps_handler(event):
+            await self.vps_watcher(event)
 
+        # 2. روليت – حساب 1
+        @self.c1.on(events.NewMessage())
+        async def r1(event):
+            if event.sender_id == ADMIN_ID and event.raw_text.startswith("."):
+                await self.handle_command(event, event.raw_text.split())
+            elif event.is_channel or event.is_group:
+                await self.handle_roulette(event, self.c1)
+
+        # 3. حساب 2 (إن وجد) – روليت فقط
         if self.c2:
-            @self.c2.on(events.NewMessage)
-            async def h2(e):
-                if e.is_channel or e.is_group:
-                    await self.handle_message(e, self.c2)
+            @self.c2.on(events.NewMessage())
+            async def r2(event):
+                if event.is_channel or event.is_group:
+                    await self.handle_roulette(event, self.c2)
 
+        # ---------- أزرار اللوحة ----------
+        @self.c1.on(events.CallbackQuery)
+        async def cb(event):
+            data = event.data.decode()
+            if data.startswith("copy_"):
+                cmd = data[5:]
+                await event.answer(f"✅ تم نسخ .{cmd}")
+            elif data.startswith("copy_shell_"):
+                await event.answer("✅ تم نسخ النص")
+
+        # ---------- مهام دورية ----------
         asyncio.create_task(self.keep_alive(self.c1, "ح1"))
         if self.c2: asyncio.create_task(self.keep_alive(self.c2, "ح2"))
 
-        logger.info("🚀 Ultimate Hunter انطلق")
+        async def periodic():
+            while self.running:
+                await asyncio.sleep(21600)  # كل 6 ساعات
+                await self.leave_dead_channels()
+                await self.update_stats_msg()
+        asyncio.create_task(periodic())
+
+        # إظهار الحسابين متصلين دائمًا
+        await self.c1(UpdateStatusRequest(offline=False))
+        if self.c2: await self.c2(UpdateStatusRequest(offline=False))
+
+        # رسالة بدء التشغيل
+        await self.main_client.send_message(
+            'me',
+            "👋 **Omega VPS Hunter انطلق**\n"
+            f"🎯 يراقب {TARGET_CHANNEL}\n"
+            f"📨 يرسل VPS إلى {NOTIFY_USER}\n"
+            ".panel للوحة التحكم"
+        )
+        await self.update_stats_msg()
+        logger.info("🚀 Omega VPS Hunter يعمل الآن")
         await self.c1.run_until_disconnected()
 
+
 if __name__ == "__main__":
-    asyncio.run(UltimateHunter().main())
+    asyncio.run(OmegaVPSHunter().main())
