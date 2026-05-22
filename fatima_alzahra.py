@@ -1,45 +1,43 @@
 #!/usr/bin/env python3
 """
 ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
-Omega Flawless – صائد الروليت والـ VPS (بدون أخطاء)
-يتجنب FloodWait تماماً | معرفات القنوات بالأرقام | جدولة ذكية
+Omega Flawless v2 – صائد الـ VPS والروليت
+يعالج FloodWait السابق بذكاء | استخراج VPS من تنسيقات متعددة
 ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
 """
 import os, asyncio, random, re, time, logging, json
 from datetime import datetime, timedelta
-from telethon import TelegramClient, events, Button, functions, types
+from telethon import TelegramClient, events, Button, functions
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
 from telethon.tl.functions.account import UpdateStatusRequest
 from telethon.errors import (
     FloodWaitError, UserBannedInChannelError, UserChannelsTooMuchError,
-    ChannelsTooMuchError, PeerFloodError, AuthKeyDuplicatedError
+    ChannelsTooMuchError, AuthKeyDuplicatedError
 )
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler('flawless.log'), logging.StreamHandler()]
+    handlers=[logging.FileHandler('flawless_v2.log'), logging.StreamHandler()]
 )
-logger = logging.getLogger("Flawless")
+logger = logging.getLogger("FlawlessV2")
 
 # ---------- الإعدادات ----------
 API_ID_1 = int(os.environ["API_ID_1"]); API_HASH_1 = os.environ["API_HASH_1"]; SESSION_1 = os.environ["SESSION_1"]
 API_ID_2 = int(os.environ.get("API_ID_2", 0)); API_HASH_2 = os.environ.get("API_HASH_2", ""); SESSION_2 = os.environ.get("SESSION_2", "")
 ADMIN_ID = int(os.environ["ADMIN_ID"])
-NOTIFY_USER = os.environ.get("NOTIFY_USER", "me")  # حساب استقبال VPS (افتراضي: المحفوظات)
-VPS_CHANNEL_ID = int(os.environ.get("VPS_CHANNEL_ID", 0))  # المعرف الرقمي لقناة FreeinternetTM
+NOTIFY_USER = os.environ.get("NOTIFY_USER", "me")
+VPS_CHANNEL_ID = int(os.environ.get("VPS_CHANNEL_ID", 0))
 
-# كلمات الصيد
 HUNT_BUTTONS = ["مشاركة", "انضمام", "سحب", "تدوير", "دخول", "تأكيد", "اضغط هنا"]
-VOTE_BUTTONS = ["❤️", "👍", "تصويت", "يستحق", "صوت"]
 DANGER_WORDS = ["أكثر نجوم", "من يضع", "تصويت بنجوم", "اكثر شخص يحط", "يحط يربح", "مزاد نجوم"]
 SAFE_CONTEST_REGEX = r'أول\s*(شخص|واحد|من)\s*(ي|يلي)?\s*(كتب|يكتب|قال|يقول|رد|يرد|علق|يعلق)\s*[({\[].*?[)}\]]'
 
-# ملف التحكم بالسرعة
 SPEED_FILE = "flawless_speed.json"
+STATS_MSG_ID = None
 
-class OmegaFlawless:
+class OmegaFlawlessV2:
     def __init__(self):
         self.c1 = TelegramClient(StringSession(SESSION_1), API_ID_1, API_HASH_1)
         self.c2 = TelegramClient(StringSession(SESSION_2), API_ID_2, API_HASH_2) if SESSION_2 else None
@@ -47,41 +45,35 @@ class OmegaFlawless:
         self.stats = {"vps":0, "wins":0, "left":0, "start":time.time()}
         self.cache = set()
         self.speed = self.load_speed()
-        self.join_queue = asyncio.Queue()   # طابور الانضمام للقنوات (لتجنب التكدس)
+        self.join_queue = asyncio.Queue()
         self.main_client = None
 
-    # ---------- إدارة السرعة ----------
     def load_speed(self):
         try: return json.load(open(SPEED_FILE, 'r'))
-        except: return {"delay": 60, "consecutive_fails": 0}
+        except: return {"delay": 60, "fails": 0}
     def save_speed(self):
         json.dump(self.speed, open(SPEED_FILE,'w'), indent=2)
 
     async def dynamic_delay(self):
-        """تأخير يزداد كلما زادت الأخطاء"""
-        base = self.speed["delay"] * (1 + 0.2 * self.speed["consecutive_fails"])
-        wait = random.uniform(base * 0.8, base * 1.2)
-        await asyncio.sleep(wait)
+        base = self.speed["delay"] * (1 + 0.2 * self.speed["fails"])
+        await asyncio.sleep(random.uniform(base * 0.8, base * 1.2))
 
     async def handle_flood(self, e):
-        """عند حدوث FloodWait، نزيد التأخير وننتظر"""
         if isinstance(e, FloodWaitError):
-            logger.warning(f"⏳ FloodWait {e.seconds}s - زيادة التأخير")
+            logger.warning(f"⏳ FloodWait {e.seconds}s")
             self.speed["delay"] = min(600, self.speed["delay"] * 2)
-            self.speed["consecutive_fails"] += 1
+            self.speed["fails"] += 1
             self.save_speed()
             await asyncio.sleep(e.seconds)
             return True
         return False
 
     async def success_action(self):
-        """عند نجاح عملية، نقلل التأخير تدريجياً"""
-        self.speed["consecutive_fails"] = max(0, self.speed["consecutive_fails"] - 1)
+        self.speed["fails"] = max(0, self.speed["fails"] - 1)
         if self.speed["delay"] > 60:
             self.speed["delay"] = max(60, self.speed["delay"] * 0.9)
         self.save_speed()
 
-    # ---------- اتصال ----------
     async def connect(self, client, name):
         for _ in range(3):
             try:
@@ -90,8 +82,7 @@ class OmegaFlawless:
                     logger.info(f"✅ {name}")
                     return True
             except AuthKeyDuplicatedError:
-                logger.critical(f"🔑 {name} جلسة مكررة! أوقف أي تشغيل آخر.")
-                break
+                logger.critical(f"🔑 {name} جلسة مكررة!"); break
             except Exception as e: logger.error(f"❌ {name}: {e}")
             await asyncio.sleep(10)
         return False
@@ -104,13 +95,12 @@ class OmegaFlawless:
             except: pass
             await asyncio.sleep(120)
 
-    # ---------- لوحة تحكم حية ----------
     async def live_stats(self):
         global STATS_MSG_ID
         while self.running:
             if self.main_client:
                 uptime = str(timedelta(seconds=int(time.time()-self.stats['start'])))
-                msg = (f"📊 **Flawless**\n🕒 {datetime.now():%H:%M:%S}\n⏱️ {uptime}\n"
+                msg = (f"📊 **Flawless V2**\n🕒 {datetime.now():%H:%M:%S}\n⏱️ {uptime}\n"
                        f"🌐 VPS:{self.stats['vps']}\n🏆 روليت:{self.stats['wins']}\n"
                        f"🚪 مغادرة:{self.stats['left']}\n🐌 تأخير:{self.speed['delay']}s")
                 try:
@@ -119,23 +109,52 @@ class OmegaFlawless:
                 except: pass
             await asyncio.sleep(5)
 
-    # ---------- مراقبة VPS (بالمعرف الرقمي) ----------
+    # ---------- استخراج VPS من تنسيقات متعددة ----------
+    def extract_vps(self, text):
+        """محاولة استخراج IP, User, Password من النص بمختلف التنسيقات"""
+        ip = user = pwd = None
+
+        # تنسيق 1: "🌐 IP: 94.72.120.108" مع "👤 User: r00t" و "🔐 New password: sinko@"
+        ip1 = re.search(r'(?:IP[:\s]*|🌐\s*IP[:\s]*)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', text)
+        if ip1:
+            ip = ip1.group(1)
+            user1 = re.search(r'(?:User[:\s]*|👤\s*User[:\s]*)(\S+)', text)
+            if user1: user = user1.group(1)
+            pwd1 = re.search(r'(?:New password[:\s]*|🔐\s*New password[:\s]*|password[:\s]*)(\S+)', text)
+            if pwd1: pwd = pwd1.group(1)
+
+        # تنسيق 2: "VPS 🇫🇷" ثم "37.60.235.208" في سطر جديد
+        if not ip:
+            ip2 = re.search(r'(?:^|\n)\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s*(?:\n|$)', text, re.MULTILINE)
+            if ip2:
+                ip = ip2.group(1).strip()
+                # غالباً user هو "root"
+                user = "root"
+                # كلمة المرور قد تكون في سطر يحتوي على "@" مثل "ACON@VPS"
+                pwd2 = re.search(r'(?:^|\n)\s*([^\s]+@[^\s]+)\s*(?:\n|$)', text, re.MULTILINE)
+                if pwd2: pwd = pwd2.group(1).strip()
+                else:
+                    # قد تكون كلمة مرور بدون @: "ACON@VPS" (احتوى @) أو كلمة عادية مثل "sinko@"
+                    pwd3 = re.search(r'(?:^|\n)\s*([A-Za-z0-9@]+)\s*(?:\n|$)', text, re.MULTILINE)
+                    if pwd3: pwd = pwd3.group(1).strip()
+
+        if ip and pwd:
+            if not user: user = "root"
+            return ip, user, pwd
+        return None, None, None
+
     async def vps_watcher(self, event):
         text = event.raw_text or ""
-        ip = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', text)
-        pwd = re.search(r'(?:password[:\s]*|🔐\s*New password[:\s]*)(\S+)', text, re.I)
+        ip, user, pwd = self.extract_vps(text)
         if ip and pwd:
-            ip_val, pwd_val = ip.group(1), pwd.group(1)
-            user = re.search(r'(?:User[:\s]*|👤\s*User[:\s]*)(\S+)', text, re.I)
-            user_val = user.group(1) if user else "root"
             self.stats['vps'] += 1
-            msg = (f"🔥 **VPS جديد**\n▪️ IP: `{ip_val}`\n▪️ User: `{user_val}`\n▪️ Pass: `{pwd_val}`")
+            msg = (f"🔥 **VPS جديد**\n▪️ IP: `{ip}`\n▪️ User: `{user}`\n▪️ Pass: `{pwd}`")
             try: await self.main_client.send_message(NOTIFY_USER, msg)
             except: pass
+            logger.info(f"✅ VPS مُرسَل: {ip}")
 
-    # ---------- خدمة الانضمام للقنوات (خلفية) ----------
+    # ---------- طابور الانضمام ----------
     async def join_worker(self):
-        """يستهلك طابور الانضمام بحذر شديد"""
         while self.running:
             channel_id = await self.join_queue.get()
             try:
@@ -144,15 +163,14 @@ class OmegaFlawless:
                 await self.success_action()
                 logger.info(f"✅ انضم للقناة {channel_id}")
             except (UserChannelsTooMuchError, ChannelsTooMuchError):
-                logger.warning("⚠️ الحساب ممتلئ، محاولة مغادرة أقدم 3 قنوات")
+                logger.warning("⚠️ الحساب ممتلئ، مغادرة أقدم 3 قنوات")
                 await self.leave_oldest(3)
                 await asyncio.sleep(10)
                 try: await self.c1(JoinChannelRequest(channel_id))
                 except: pass
             except FloodWaitError as e:
                 await self.handle_flood(e)
-            except Exception as e:
-                logger.error(f"فشل الانضمام {channel_id}: {e}")
+            except: pass
             self.join_queue.task_done()
 
     async def leave_oldest(self, count=3):
@@ -166,13 +184,12 @@ class OmegaFlawless:
                 await asyncio.sleep(2)
             except: pass
 
-    # ---------- روليت ----------
+    # ---------- روليت (بدون تغيير عن السابق) ----------
     async def process_roulette(self, event, client):
         if event.id in self.cache: return
         text = event.raw_text or ""
         if any(w in text for w in DANGER_WORDS): return
 
-        # مسابقة آمنة
         safe = re.search(SAFE_CONTEST_REGEX, text, re.I)
         if safe:
             reply = re.search(r'[({\[].*?[)}\]]', text)
@@ -184,20 +201,16 @@ class OmegaFlawless:
 
         if not event.reply_markup: return
 
-        # استخراج روابط القنوات للانضمام (نضيفها للطابور بدلاً من الانضمام الفوري)
+        # استخراج أسماء القنوات وإضافتها للطابور
         links = set(re.findall(r'(?:t\.me/|@)([\w_]+)', text))
         for username in links:
             if username.lower() in ['bot', 'c', 'me']: continue
-            # نحاول الحصول على المعرف الرقمي من الذاكرة أو نضيفه للطابور لاحقاً
-            # سنحاول حلها ببطء
             try:
                 entity = await client.get_entity(username)
                 await self.join_queue.put(entity.id)
-            except FloodWaitError as e:
-                await self.handle_flood(e)
+            except FloodWaitError as e: await self.handle_flood(e)
             except: pass
 
-        # نضغط أزرار الروليت
         if any(k in (text + " ".join([b.text for r in event.reply_markup.rows for b in r.buttons])).lower() for k in HUNT_BUTTONS):
             self.cache.add(event.id)
             await asyncio.sleep(random.uniform(2,5))
@@ -225,8 +238,7 @@ class OmegaFlawless:
         elif cmd=="start": self.running=True; await event.reply("✅")
         elif cmd=="stats": await event.reply("📊 اللوحة حية")
         elif cmd=="panel":
-            btns = [[Button.inline(".stats",b"copy_stats")]]
-            await event.respond("🔥 **Flawless**", buttons=btns)
+            await event.respond("🔥 **Flawless V2**", buttons=[[Button.inline(".stats",b"copy_stats")]])
 
     # ---------- تشغيل ----------
     async def main(self):
@@ -234,11 +246,9 @@ class OmegaFlawless:
         self.main_client = self.c1
         if self.c2 and not await self.connect(self.c2, "ح2"): self.c2 = None
 
-        # مراقبة VPS باستخدام المعرف الرقمي
         if VPS_CHANNEL_ID:
             @self.c1.on(events.NewMessage(chats=VPS_CHANNEL_ID))
             async def vps_handler(event): await self.vps_watcher(event)
-            logger.info(f"🎯 مراقبة VPS بالقناة {VPS_CHANNEL_ID}")
         else:
             logger.warning("⚠️ لم يتم تعيين VPS_CHANNEL_ID، لن تراقب الـ VPS")
 
@@ -255,12 +265,10 @@ class OmegaFlawless:
                 if event.is_channel or event.is_group:
                     await self.process_roulette(event, self.c2)
 
-        # أزرار النسخ
         @self.c1.on(events.CallbackQuery)
         async def cb(event):
             if event.data.decode().startswith("copy_"): await event.answer("✅")
 
-        # بدء خدمة الانضمام
         asyncio.create_task(self.join_worker())
         asyncio.create_task(self.keep_alive(self.c1,"ح1"))
         if self.c2: asyncio.create_task(self.keep_alive(self.c2,"ح2"))
@@ -281,9 +289,8 @@ class OmegaFlawless:
         asyncio.create_task(clean())
 
         await self.c1(UpdateStatusRequest(offline=False))
-        logger.info("🚀 Flawless يعمل بدون أخطاء")
+        logger.info("🚀 Flawless V2 يعمل بدون أخطاء")
         await self.c1.run_until_disconnected()
 
 if __name__ == "__main__":
-    STATS_MSG_ID = None
-    asyncio.run(OmegaFlawless().main())
+    asyncio.run(OmegaFlawlessV2().main())
