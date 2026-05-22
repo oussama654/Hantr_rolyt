@@ -1,25 +1,17 @@
-name: Omega Ultimate X 24/7
+name: Flawless 24/7
 on:
-  schedule:
-    - cron: '0 */6 * * *'   # كل 6 ساعات
-  workflow_dispatch:        # تشغيل يدوي
-
+  schedule: [{cron: '0 */6 * * *'}]
+  workflow_dispatch:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 360    # 6 ساعات كحد أقصى
-
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: تثبيت المكتبات
-        run: pip install telethon paramiko
-
-      - name: تشغيل Omega Ultimate X
+        with: {python-version: '3.11'}
+      - run: pip install -r requirements.txt
+      - name: تشغيل
         env:
           API_ID_1: ${{ secrets.API_ID_1 }}
           API_HASH_1: ${{ secrets.API_HASH_1 }}
@@ -28,6 +20,6 @@ jobs:
           API_HASH_2: ${{ secrets.API_HASH_2 }}
           SESSION_2: ${{ secrets.SESSION_2 }}
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
-          NEW_VPS_PASSWORD: ${{ secrets.NEW_VPS_PASSWORD }}
-        run: |
-          python fatima_alzahra.py || echo "⚠️ السكربت خرج بخطأ، سيُعاد تشغيله في الموعد التالي"
+          NOTIFY_USER: ${{ secrets.NOTIFY_USER }}
+          VPS_CHANNEL_ID: ${{ secrets.VPS_CHANNEL_ID }}
+        run: python fatima_alzahra.py
