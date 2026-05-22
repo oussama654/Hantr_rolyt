@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""
-■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
-Omega VPS Hunter – صائد الـ VPS + روليت 24/7
-يراقب قناة FreeinternetTM ويسحب بيانات VPS بسرعة البرق
-يدير حسابين | لوحة تحكم حية | أوامر تحكم كاملة
-■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
-"""
 import os, asyncio, random, re, time, logging, json
 from datetime import datetime, timedelta
 from telethon import TelegramClient, events, functions, types, Button
@@ -29,8 +22,8 @@ logger = logging.getLogger("OmegaVPS")
 API_ID_1 = int(os.environ["API_ID_1"]); API_HASH_1 = os.environ["API_HASH_1"]; SESSION_1 = os.environ["SESSION_1"]
 API_ID_2 = int(os.environ.get("API_ID_2", 0)); API_HASH_2 = os.environ.get("API_HASH_2", ""); SESSION_2 = os.environ.get("SESSION_2", "")
 ADMIN_ID = int(os.environ["ADMIN_ID"])
-TARGET_CHANNEL = "FreeinternetTM"      # القناة التي نراقبها
-NOTIFY_USER = "KOA_7"                  # الحساب الذي تصل إليه بيانات VPS (يمكن تغييره إلى @Pro)
+TARGET_CHANNEL = "FreeinternetTM"      
+NOTIFY_USER = "KOA_7"                  
 
 # كلمات الصيد
 HUNT_KEYWORDS = [
@@ -42,7 +35,7 @@ SAFE_CONTEST_REGEX = r'أول\s*(شخص|واحد|من)\s*(ي|يلي)?\s*(كتب|
 
 # ملف التعلم
 LEARNING_FILE = "omega_vps_memory.json"
-STATS_MSG_ID = None   # رسالة الإحصائيات الحية في المحفوظات
+STATS_MSG_ID = None   
 
 class OmegaVPSHunter:
     def __init__(self):
@@ -55,7 +48,7 @@ class OmegaVPSHunter:
         }
         self.cache = set()
         self.memory = self.load_memory()
-        self.main_client = None  # يُستخدم للإحصائيات وإرسال التنبيهات
+        self.main_client = None  
 
     # ---------- ذاكرة التعلم ----------
     def load_memory(self):
@@ -108,7 +101,7 @@ class OmegaVPSHunter:
                 pass
             await asyncio.sleep(120)
 
-    # ========== إحصائيات حية (رسالة واحدة في المحفوظات) ==========
+    # ========== إحصائيات حية ==========
     async def update_stats_msg(self):
         global STATS_MSG_ID
         if not self.main_client:
@@ -135,9 +128,7 @@ class OmegaVPSHunter:
 
     # ========== مراقبة قناة الـ VPS ==========
     async def vps_watcher(self, event):
-        """استخراج بيانات VPS من رسالة وإرسالها إلى المستخدم"""
         text = event.raw_text or ""
-        # نمط regex متسامح لاستخراج IP, User, Password
         ip = re.search(r'(?:IP[:\s]*|🌐\s*IP[:\s]*)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', text)
         user = re.search(r'(?:User[:\s]*|👤\s*User[:\s]*)(\S+)', text)
         pwd = re.search(r'(?:New password[:\s]*|🔐\s*New password[:\s]*|password[:\s]*)(\S+)', text)
@@ -146,11 +137,9 @@ class OmegaVPSHunter:
             ip_val = ip.group(1)
             user_val = user.group(1)
             pwd_val = pwd.group(1)
-            # تجنب الإرسال إذا كانت البيانات مكررة (اختياري)
             self.stats['vps_captured'] += 1
             await self.update_stats_msg()
 
-            # إرسال إلى المستخدم المحدد مع أزرار نسخ
             msg = (
                 f"🌐 **VPS جديد تم اصطياده!**\n"
                 f"▪️ IP: `{ip_val}`\n"
@@ -173,7 +162,6 @@ class OmegaVPSHunter:
     async def solve_captcha(self, event):
         if not event.reply_markup: return False
         text = event.raw_text or ""
-        # رياضيات
         m = re.search(r'(\d+)\s*([+\-*/])\s*(\d+)', text)
         if m:
             res = str(eval(f"{m.group(1)}{m.group(2)}{m.group(3)}"))
@@ -182,7 +170,6 @@ class OmegaVPSHunter:
                     if btn.text.strip() == res:
                         await event.click(r, b)
                         return True
-        # إيموجي
         em = re.search(r'\((.*?)\)', text)
         if em:
             target = em.group(1).strip()
@@ -193,28 +180,22 @@ class OmegaVPSHunter:
                         return True
         return False
 
-    # ========== تنفيذ إجراءات التوجيه (قنوات، تصويت، كتابة) ==========
+    # ========== تنفيذ إجراءات التوجيه المحدثة ==========
     async def follow_redirects(self, event, client):
-        """يتابع الأزرار التي توجه إلى قنوات أو تتطلب كتابة تعليق أو تصويت"""
         if not event.reply_markup: return
-        for row in event.reply_markup.rows:
-            for btn in row.buttons:
-                # أزرار تحوي روابط
+        for r, row in enumerate(event.reply_markup.rows):
+            for b, btn in enumerate(row.buttons):
                 if btn.url and 't.me' in btn.url:
                     await self.handle_redirect_link(btn.url, client)
                     return
-                # أزرار مثل "هنا" أو "قناة" (callback قد يفتح توجيه)
                 if any(w in btn.text for w in ['هنا', 'قناة', 'انضم', 'اضغط']):
                     try:
-                        await event.click(row.row_index, btn.column_index)
+                        await event.click(r, b)
                         await asyncio.sleep(2)
-                        # بعد النقر قد نظهر رسالة جديدة، لا نستطيع متابعتها آلياً بسهولة
-                        # لكن سنحاول العودة للرسالة الأصلية وننقر أزرارها
                         return
                     except: pass
 
     async def handle_redirect_link(self, url, client):
-        """الانضمام لقناة وإجراء التصويت المطلوب"""
         match = re.match(r'(?:https?://)?t\.me/([\w\d_]+)/?(\d+)?', url)
         if not match: return
         username, msg_id = match.group(1), match.group(2)
@@ -224,23 +205,20 @@ class OmegaVPSHunter:
             if msg_id:
                 target_msg = await client.get_messages(entity, ids=int(msg_id))
                 if target_msg and target_msg.reply_markup:
-                    # نبحث عن زر تصويت (قلب، 👍…)
-                    for row in target_msg.reply_markup.rows:
-                        for btn in row.buttons:
+                    for r, row in enumerate(target_msg.reply_markup.rows):
+                        for b, btn in enumerate(row.buttons):
                             if any(k in btn.text for k in ['❤️','👍','👎','تصويت','vote']):
-                                await target_msg.click(row.row_index, btn.column_index)
+                                await target_msg.click(r, b)
                                 return
-                    # وإلا نضغط أول زر
                     await target_msg.click(0, 0)
                 elif target_msg:
-                    # ربما نحتاج كتابة "يستحق"
                     try:
                         await target_msg.reply("يستحق")
                     except: pass
         except Exception as e:
             logger.warning(f"فشل في معالجة رابط التوجيه {url}: {e}")
 
-    # ========== المعالج الرئيسي للروليت ==========
+    # ========== المعالج الرئيسي للروليت المصلح ==========
     async def handle_roulette(self, event, client):
         if not self.running: return
         chat = await event.get_chat()
@@ -250,7 +228,7 @@ class OmegaVPSHunter:
         text = event.raw_text or ""
         if any(w in text for w in DANGER_WORDS): return
 
-        # مسابقة آمنة
+        # مسابقة آمنة - تم إصلاح دالة الاستدعاء هنا
         safe = re.search(SAFE_CONTEST_REGEX, text, re.I)
         if safe:
             reply_text = re.search(r'[({\[].*?[)}\]]', text)
@@ -258,48 +236,44 @@ class OmegaVPSHunter:
             try: await event.reply(reply_text)
             except: pass
             if event.reply_markup:
-                await self.process_buttons(event, client, chat_id)
+                await self.click_hunt(event, client, chat_id)
             return
 
         if event.id in self.cache: return
 
         if event.reply_markup:
-            # حل كابتشا أولاً
             if await self.solve_captcha(event):
                 self.cache.add(event.id)
                 return
 
-            # ابحث عن أزرار توجيه (ذات روابط)
             btn_texts = [btn.text for row in event.reply_markup.rows for btn in row.buttons]
             has_redirect = any('t.me' in (btn.url or '') for row in event.reply_markup.rows for btn in row.buttons)
 
             if has_redirect or any(w in btn_texts for w in ['هنا', 'قناة', 'تصويت', 'علق']):
                 await self.follow_redirects(event, client)
-                # بعد تنفيذ التوجيه، نعود ونضغط أزرار الصيد
                 await asyncio.sleep(2)
                 try:
-                    # نعيد جلب الرسالة الأصلية
                     fresh = await client.get_messages(chat_id, ids=event.id)
                     if fresh and fresh.reply_markup:
                         await self.click_hunt(fresh, client, chat_id)
                 except: pass
                 return
 
-            # روليت عادي
-            if any(k in (text + " ".join(btn_texts)).lower() for k in HUNT_KEYWORDS):
+            if any(k in (text + " " + " ".join(btn_texts)).lower() for k in HUNT_KEYWORDS):
                 self.cache.add(event.id)
                 await self.join_required(event, client)
                 delay = self.get_delay()
                 await asyncio.sleep(delay)
                 await self.click_hunt(event, client, chat_id)
 
+    # ========== دالة النقر المصححة بالكامل ==========
     async def click_hunt(self, event, client, chat_id):
         if not event.reply_markup: return
-        for row in event.reply_markup.rows:
-            for btn in row.buttons:
+        for r, row in enumerate(event.reply_markup.rows):
+            for b, btn in enumerate(row.buttons):
                 if any(k in btn.text for k in HUNT_KEYWORDS) or "مشاركة" in btn.text:
                     try:
-                        await event.click(row.row_index, btn.column_index)
+                        await event.click(r, b)
                         self.stats['wins'] += 1
                         if self.stats['wins'] % 10 == 0:
                             self.memory['delay_multiplier'] = max(0.8, self.memory['delay_multiplier'] - 0.05)
@@ -314,7 +288,6 @@ class OmegaVPSHunter:
                         except: pass
                         self.stats['channels_left'] += 1
                     except: pass
-        # زر شفاف/أي زر متبقٍ
         try:
             await event.click(0, 0)
             self.stats['wins'] += 1
@@ -378,13 +351,10 @@ class OmegaVPSHunter:
         self.main_client = self.c1
         if self.c2 and not await self.connect(self.c2, "حساب 2"): self.c2 = None
 
-        # ---------- مستمعات ----------
-        # 1. مراقبة قناة الـ VPS (حساب 1)
         @self.c1.on(events.NewMessage(chats=TARGET_CHANNEL))
         async def vps_handler(event):
             await self.vps_watcher(event)
 
-        # 2. روليت – حساب 1
         @self.c1.on(events.NewMessage())
         async def r1(event):
             if event.sender_id == ADMIN_ID and event.raw_text.startswith("."):
@@ -392,14 +362,12 @@ class OmegaVPSHunter:
             elif event.is_channel or event.is_group:
                 await self.handle_roulette(event, self.c1)
 
-        # 3. حساب 2 (إن وجد) – روليت فقط
         if self.c2:
             @self.c2.on(events.NewMessage())
             async def r2(event):
                 if event.is_channel or event.is_group:
                     await self.handle_roulette(event, self.c2)
 
-        # ---------- أزرار اللوحة ----------
         @self.c1.on(events.CallbackQuery)
         async def cb(event):
             data = event.data.decode()
@@ -409,22 +377,19 @@ class OmegaVPSHunter:
             elif data.startswith("copy_shell_"):
                 await event.answer("✅ تم نسخ النص")
 
-        # ---------- مهام دورية ----------
         asyncio.create_task(self.keep_alive(self.c1, "ح1"))
         if self.c2: asyncio.create_task(self.keep_alive(self.c2, "ح2"))
 
         async def periodic():
             while self.running:
-                await asyncio.sleep(21600)  # كل 6 ساعات
+                await asyncio.sleep(21600)  
                 await self.leave_dead_channels()
                 await self.update_stats_msg()
         asyncio.create_task(periodic())
 
-        # إظهار الحسابين متصلين دائمًا
         await self.c1(UpdateStatusRequest(offline=False))
         if self.c2: await self.c2(UpdateStatusRequest(offline=False))
 
-        # رسالة بدء التشغيل
         await self.main_client.send_message(
             'me',
             "👋 **Omega VPS Hunter انطلق**\n"
@@ -436,6 +401,6 @@ class OmegaVPSHunter:
         logger.info("🚀 Omega VPS Hunter يعمل الآن")
         await self.c1.run_until_disconnected()
 
-
 if __name__ == "__main__":
     asyncio.run(OmegaVPSHunter().main())
+
