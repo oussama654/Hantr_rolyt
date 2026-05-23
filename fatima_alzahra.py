@@ -22,6 +22,7 @@ import logging
 import json
 from datetime import datetime, timedelta
 from telethon import TelegramClient, events, Button, functions
+from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
 from telethon.tl.functions.account import UpdateStatusRequest
 from telethon.errors import (
