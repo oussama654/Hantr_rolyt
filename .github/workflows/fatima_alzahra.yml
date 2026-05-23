@@ -35,6 +35,9 @@ jobs:
           API_ID_2: ${{ secrets.API_ID_2 }}
           API_HASH_2: ${{ secrets.API_HASH_2 }}
           SESSION_2: ${{ secrets.SESSION_2 }}
+          API_ID_3: ${{ secrets.API_ID_3 }}
+          API_HASH_3: ${{ secrets.API_HASH_3 }}
+          SESSION_3: ${{ secrets.SESSION_3 }}
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
           NOTIFY_USER: ${{ secrets.NOTIFY_USER }}
           VPS_CHANNEL_ID: ${{ secrets.VPS_CHANNEL_ID }}
@@ -49,3 +52,5 @@ jobs:
         run: |
           echo "تم الوصول للحد الآمن، جاري إعادة تشغيل السكربت ليبدأ دورة جديدة..."
           gh workflow run "${{ github.workflow }}"
+
+
