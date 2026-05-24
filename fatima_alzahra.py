@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""
-███████████████████████████████████████████████████████████████████████████████
-Omega Flawless v5 – الإصدار النهائي (3 حسابات، بدون همسات، تأخير كبير، صيد VPS)
-- دعم 3 حسابات مع اتصال دائم
-- تجنب الهمسات والبوتات تماماً
-- تأخير عشوائي بين 30 ثانية ودقيقتين
-- صيد VPS من قنوات محددة وتغيير كلمة المرور
-- أوامر تحكم شاملة (.start, .stop, .stats, .config, .restart)
-███████████████████████████████████████████████████████████████████████████████
-"""
-
 import os
 import asyncio
 import random
@@ -18,16 +7,13 @@ import time
 import logging
 import json
 from datetime import datetime, timedelta
-from telethon import TelegramClient, events, Button, functions
+from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
 from telethon.tl.functions.account import UpdateStatusRequest
-from telethon.errors import (
-    FloodWaitError, UserBannedInChannelError, UserChannelsTooMuchError,
-    ChannelsTooMuchError, AuthKeyDuplicatedError
-)
+from telethon.errors import FloodWaitError, AuthKeyDuplicatedError
 
-# paramiko لتغيير كلمة مرور VPS (اختياري)
+# paramiko اختياري لـ VPS
 try:
     import paramiko
     from paramiko import SSHClient, AutoAddPolicy
@@ -35,7 +21,6 @@ try:
 except ImportError:
     SSH_AVAILABLE = False
 
-# إعدادات التسجيل
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -43,8 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("FlawlessV5")
 
-# ========== قراءة متغيرات البيئة ==========
-# الحسابات (حتى 3)
+# قراءة المتغيرات
 API_ID_1 = int(os.environ["API_ID_1"])
 API_HASH_1 = os.environ["API_HASH_1"]
 SESSION_1 = os.environ["SESSION_1"]
@@ -62,49 +46,46 @@ NOTIFY_USER = os.environ.get("NOTIFY_USER", "me")
 VPS_CHANNEL_ID = int(os.environ.get("VPS_CHANNEL_ID", 0))
 AUTO_CHANGE_VPS_PASS = os.environ.get("AUTO_CHANGE_VPS_PASS", "false").lower() == "true"
 
-# إعدادات التأخير (بالثواني)
-DELAY_MIN = int(os.environ.get("DELAY_MIN", 30))
-DELAY_MAX = int(os.environ.get("DELAY_MAX", 120))
+DELAY_MIN = int(os.environ.get("DELAY_MIN", 45))
+DELAY_MAX = int(os.environ.get("DELAY_MAX", 180))
 
-# ========== الكلمات المفتاحية للأزرار ==========
-PARTICIPATE_BUTTONS = [
-    "مشاركة", "انضمام", "سحب", "تدوير", "دخول", "تأكيد", "اضغط هنا",
-    "المشاركة", "اشترك", "join", "participate", "spin", "شارك"
-]
+# كلمات الهمسات
+WHISPER_KEYWORDS = ["همسة", "الهمسات", "همسة...", "صارخني", "ililbot", "همس", "سرية", "بوت صارخني", "همسة سرية"]
 
-# كلمات تدل على مسابقات خطيرة (نتجنبها)
+PARTICIPATE_BUTTONS = ["مشاركة", "انضمام", "سحب", "تدوير", "دخول", "تأكيد", "اضغط هنا", "المشاركة", "اشترك", "join", "participate", "spin"]
 DANGER_WORDS = ["أكثر نجوم", "من يضع", "تصويت بنجوم", "اكثر شخص يحط", "يحط يربح", "مزاد نجوم"]
 
-# كلمات الهمسات التي يجب تجاهلها
-WHISPER_WORDS = ["همسة", "صارخني", "ililbot", "همس", "سرية", "بوت صارخني", "همسة سرية", "همسات"]
-
-# ========== أنماط الكابتشا ==========
 MATH_PATTERNS = [
     r'ناتج\s*:\s*(\d+)\s*\+\s*(\d+)',
     r'(\d+)\s*\+\s*(\d+)\s*\?',
     r'كم\s*ناتج\s*(\d+)\s*\+\s*(\d+)',
     r'(\d+)\s*\+\s*(\d+)',
-    r'(\d+)\s*\-\s*(\d+)',
-    r'(\d+)\s*\*\s*(\d+)',
 ]
-
 EMOJI_PATTERN = r'يشبه هذا الإيموجي\s*([\U00010000-\U0010FFFF])|اضغط على الزر الذي يحتوي على\s*([\U00010000-\U0010FFFF])'
-
 COMMENT_PATTERNS = [
     r'هل يستحق\s*(.*?)\?',
     r'اكتب\s*"([^"]+)"',
     r'علق\s*بـ\s*([^\s]+)',
-    r'يقول\s*"([^"]+)"'
 ]
-
 CHANNEL_PATTERNS = [
     r'(?:@|t\.me/)([a-zA-Z0-9_]{5,})',
     r'الاشتراك في\s*([@a-zA-Z0-9_]+)',
     r'قنوات التالية:\s*(?:[0-9]+\.\s*)?(@[a-zA-Z0-9_]+)',
-    r'(?:انضم|اشترك)\s*إلى\s*([@a-zA-Z0-9_]+)'
 ]
 
-# ========== الفئة الرئيسية لكل حساب ==========
+# ملفات الحظر
+BLOCKLIST_FILE = "blocked_channels.json"
+def load_blocklist():
+    try:
+        with open(BLOCKLIST_FILE, 'r') as f:
+            return set(json.load(f))
+    except:
+        return set()
+def save_blocklist(blocked):
+    with open(BLOCKLIST_FILE, 'w') as f:
+        json.dump(list(blocked), f)
+
+# ========== كلاس الحساب ==========
 class AccountHandler:
     def __init__(self, client, name, account_id, parent):
         self.client = client
@@ -114,282 +95,237 @@ class AccountHandler:
         self.running = True
         self.cache = set()
 
-    async def dynamic_delay(self):
-        """تأخير عشوائي بين DELAY_MIN و DELAY_MAX (افتراضي 30-120 ثانية)"""
-        delay = random.uniform(DELAY_MIN, DELAY_MAX)
-        logger.info(f"[{self.name}] انتظار {delay:.1f} ثانية (تجنب الاكتشاف)")
-        await asyncio.sleep(delay)
+    async def delay(self):
+        wait = random.uniform(DELAY_MIN, DELAY_MAX)
+        logger.info(f"[{self.name}] انتظار {wait:.1f} ثانية")
+        await asyncio.sleep(wait)
 
     async def is_whisper(self, event):
-        """التحقق مما إذا كانت الرسالة همسة أو من بوت همسات"""
         text = event.raw_text or ""
-        # كلمات الهمسات
-        for w in WHISPER_WORDS:
-            if w in text:
+        for kw in WHISPER_KEYWORDS:
+            if kw in text:
                 return True
-        # إذا كان المرسل بوتاً معروفاً للهمسات
         if event.sender_id:
             try:
                 sender = await event.get_sender()
-                if hasattr(sender, 'bot') and sender.bot:
+                if sender and sender.bot:
                     return True
             except:
                 pass
-        # التحقق من وجود كلمة "همسة" في أي مكان
-        if "همسة" in text:
-            return True
         return False
 
-    async def solve_math_captcha(self, text, buttons):
-        for pattern in MATH_PATTERNS:
-            match = re.search(pattern, text)
-            if match:
-                groups = match.groups()
-                if len(groups) >= 2:
-                    try:
-                        a = int(groups[0])
-                        b = int(groups[1])
-                        if '+' in match.group(0) or 'جمع' in text:
-                            result = a + b
-                        elif '-' in match.group(0):
-                            result = a - b
-                        elif '*' in match.group(0):
-                            result = a * b
-                        else:
-                            result = a + b
-                        logger.info(f"[{self.name}] 🧮 مسألة: {a} + {b} = {result}")
-                        for row_idx, row in enumerate(buttons):
-                            for col_idx, btn in enumerate(row):
-                                if btn.text.strip() == str(result):
-                                    return row_idx, col_idx
-                    except:
-                        continue
+    async def solve_math(self, text, buttons):
+        for pat in MATH_PATTERNS:
+            m = re.search(pat, text)
+            if m:
+                a = int(m.group(1)); b = int(m.group(2))
+                res = a + b
+                logger.info(f"[{self.name}] مسألة: {a}+{b}={res}")
+                for i,row in enumerate(buttons):
+                    for j,btn in enumerate(row):
+                        if btn.text.strip() == str(res):
+                            return i,j
         return None
 
-    async def solve_emoji_captcha(self, text, buttons):
-        match = re.search(EMOJI_PATTERN, text)
-        if match:
-            target_emoji = match.group(1) or match.group(2)
-            if target_emoji:
-                logger.info(f"[{self.name}] 😀 إيموجي: {target_emoji}")
-                for row_idx, row in enumerate(buttons):
-                    for col_idx, btn in enumerate(row):
-                        if target_emoji in btn.text:
-                            return row_idx, col_idx
+    async def solve_emoji(self, text, buttons):
+        m = re.search(EMOJI_PATTERN, text)
+        if m:
+            em = m.group(1) or m.group(2)
+            if em:
+                for i,row in enumerate(buttons):
+                    for j,btn in enumerate(row):
+                        if em in btn.text:
+                            return i,j
         return None
 
-    async def extract_comment_text(self, text):
-        for pattern in COMMENT_PATTERNS:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                comment = match.group(1).strip().strip('"\'')
-                return comment
-        if re.search(r'هل يستحق', text, re.IGNORECASE):
+    async def extract_comment(self, text):
+        for pat in COMMENT_PATTERNS:
+            m = re.search(pat, text, re.I)
+            if m:
+                return m.group(1).strip('"\'')
+        if re.search(r'هل يستحق', text):
             return "يستحق"
         return None
 
     async def reply_comment(self, event, comment):
         try:
             if event.message.fwd_from and event.message.fwd_from.from_id:
-                original_chat_id = event.message.fwd_from.from_id.channel_id
-                if original_chat_id:
-                    original_chat = await self.client.get_entity(original_chat_id)
-                    await self.client.send_message(original_chat, comment, reply_to=event.message.id)
-                    logger.info(f"[{self.name}] ✅ رد على منشور محول: {comment}")
+                cid = event.message.fwd_from.from_id.channel_id
+                if cid:
+                    chat = await self.client.get_entity(cid)
+                    await self.client.send_message(chat, comment, reply_to=event.message.id)
+                    logger.info(f"[{self.name}] رد على منشور محول: {comment}")
                     self.parent.stats['captcha_solved'] += 1
                     return True
             await event.reply(comment)
-            logger.info(f"[{self.name}] ✅ تعليق: {comment}")
+            logger.info(f"[{self.name}] تعليق: {comment}")
             self.parent.stats['captcha_solved'] += 1
             return True
         except Exception as e:
             logger.error(f"[{self.name}] فشل التعليق: {e}")
             return False
 
-    async def click_participate_button(self, event):
+    async def click_participate(self, event):
         if not event.reply_markup:
             return False
+        # أول زر
         try:
-            first_btn = event.reply_markup.rows[0].buttons[0]
-            if first_btn.text not in ["إلغاء", "Cancel", "لا", "غلق"]:
-                await event.click(0, 0)
-                logger.info(f"[{self.name}] ✅ ضغط على أول زر: {first_btn.text}")
+            btn = event.reply_markup.rows[0].buttons[0]
+            if btn.text not in ["إلغاء","Cancel","لا"]:
+                await event.click(0,0)
+                logger.info(f"[{self.name}] ضغط أول زر: {btn.text}")
                 self.parent.stats['wins'] += 1
                 return True
         except:
             pass
-        for row_idx, row in enumerate(event.reply_markup.rows):
-            for col_idx, btn in enumerate(row.buttons):
+        # أزرار بها كلمات مشاركة
+        for i,row in enumerate(event.reply_markup.rows):
+            for j,btn in enumerate(row.buttons):
                 if any(k in btn.text for k in PARTICIPATE_BUTTONS):
-                    try:
-                        await event.click(row_idx, col_idx)
-                        logger.info(f"[{self.name}] ✅ ضغط على زر: {btn.text}")
-                        self.parent.stats['wins'] += 1
-                        return True
-                    except:
-                        pass
+                    await event.click(i,j)
+                    logger.info(f"[{self.name}] ضغط زر: {btn.text}")
+                    self.parent.stats['wins'] += 1
+                    return True
         return False
 
-    async def extract_and_join_channels(self, text):
+    async def join_channels(self, text):
+        if not self.running:
+            return
         channels = set()
-        for pattern in CHANNEL_PATTERNS:
-            matches = re.findall(pattern, text)
-            for m in matches:
-                username = m.strip('@')
-                if username and len(username) > 3 and username.lower() not in ['bot', 'c', 'me', 'telegram']:
-                    channels.add(username)
-        if not channels:
-            return 0
-        for username in channels:
+        for pat in CHANNEL_PATTERNS:
+            for m in re.findall(pat, text):
+                uname = m.strip('@')
+                if len(uname) > 3 and uname.lower() not in ['bot','c','me','telegram']:
+                    channels.add(uname)
+        blocked = load_blocklist()
+        for uname in channels:
+            if uname in blocked:
+                logger.info(f"[{self.name}] قناة {uname} محظورة، تخطي")
+                continue
             try:
-                entity = await self.client.get_entity(username)
-                await self.dynamic_delay()
+                entity = await self.client.get_entity(uname)
+                await self.delay()
                 await self.client(JoinChannelRequest(entity))
-                logger.info(f"[{self.name}] ✅ انضم للقناة: {username}")
+                logger.info(f"[{self.name}] انضم إلى {uname}")
                 self.parent.stats['joined_channels'] += 1
             except FloodWaitError as e:
                 logger.warning(f"[{self.name}] FloodWait {e.seconds}s")
                 await asyncio.sleep(e.seconds)
             except Exception as e:
-                logger.error(f"[{self.name}] فشل الانضمام {username}: {e}")
-        return len(channels)
+                logger.error(f"[{self.name}] فشل الانضمام {uname}: {e}")
 
-    async def process_message(self, event):
+    async def process(self, event):
+        if not self.running:
+            return
         if event.id in self.cache:
             return
-
-        # تجاهل الهمسات تماماً
+        # تجاهل الهمسات فوراً
         if await self.is_whisper(event):
-            logger.info(f"[{self.name}] ⚠️ تجاهل همسة: {event.raw_text[:50]}")
+            logger.info(f"[{self.name}] تجاهل همسة: {event.raw_text[:50]}")
             return
-
         text = event.raw_text or ""
-
-        # تجنب المسابقات الخطيرة
-        if any(word in text for word in DANGER_WORDS):
+        if any(w in text for w in DANGER_WORDS):
             return
 
-        # 1. الانضمام للقنوات
-        await self.extract_and_join_channels(text)
+        # انضمام للقنوات
+        await self.join_channels(text)
 
-        # 2. حل الكابتشا
+        # حل الكابتشا
         if event.reply_markup:
-            buttons = [[btn for btn in row.buttons] for row in event.reply_markup.rows]
-            math_pos = await self.solve_math_captcha(text, buttons)
-            if math_pos:
-                row, col = math_pos
+            buttons = [[b for b in row.buttons] for row in event.reply_markup.rows]
+            pos = await self.solve_math(text, buttons)
+            if not pos:
+                pos = await self.solve_emoji(text, buttons)
+            if pos:
                 try:
-                    await event.click(row, col)
-                    logger.info(f"[{self.name}] 🧠 حل كابتشا حسابي")
+                    await event.click(pos[0], pos[1])
+                    logger.info(f"[{self.name}] تم حل كابتشا")
                     self.parent.stats['captcha_solved'] += 1
-                    await self.dynamic_delay()
+                    await self.delay()
                 except Exception as e:
-                    logger.error(f"[{self.name}] فشل حل المسألة: {e}")
-            else:
-                emoji_pos = await self.solve_emoji_captcha(text, buttons)
-                if emoji_pos:
-                    row, col = emoji_pos
-                    try:
-                        await event.click(row, col)
-                        logger.info(f"[{self.name}] 😀 حل كابتشا إيموجي")
-                        self.parent.stats['captcha_solved'] += 1
-                        await self.dynamic_delay()
-                    except Exception as e:
-                        logger.error(f"[{self.name}] فشل الإيموجي: {e}")
+                    logger.error(f"[{self.name}] خطأ في الضغط: {e}")
 
-        # 3. التعليق المطلوب
-        comment = await self.extract_comment_text(text)
-        if comment:
-            await self.reply_comment(event, comment)
-            await self.dynamic_delay()
+        # تعليق
+        cmt = await self.extract_comment(text)
+        if cmt:
+            await self.reply_comment(event, cmt)
+            await self.delay()
 
-        # 4. زر المشاركة
-        if await self.click_participate_button(event):
+        # زر المشاركة
+        if await self.click_participate(event):
             self.cache.add(event.id)
             return
 
-        # 5. ضغط عام على أول زر
+        # ضغط عام (آخر زر)
         if event.reply_markup and event.id not in self.cache:
             try:
-                first_btn = event.reply_markup.rows[0].buttons[0]
-                if first_btn.text not in ["إلغاء", "Cancel", "لا"]:
-                    await event.click(0, 0)
-                    logger.info(f"[{self.name}] ⚠️ ضغط عام: {first_btn.text}")
+                btn = event.reply_markup.rows[0].buttons[0]
+                if btn.text not in ["إلغاء","Cancel","لا"]:
+                    await event.click(0,0)
+                    logger.info(f"[{self.name}] ضغط عام: {btn.text}")
                     self.parent.stats['wins'] += 1
                     self.cache.add(event.id)
             except:
                 pass
 
     async def keep_alive(self):
-        while self.running:
+        while True:
             try:
                 if not self.client.is_connected():
                     await self.client.connect()
                 await self.client(UpdateStatusRequest(offline=False))
-            except Exception as e:
-                logger.error(f"[{self.name}] Keep-alive: {e}")
+            except:
+                pass
             await asyncio.sleep(120)
 
     async def run(self):
         @self.client.on(events.NewMessage)
         async def handler(event):
-            # تجاهل أوامر الأدمن (تعالج عالمياً)
             if event.sender_id == ADMIN_ID and event.raw_text.startswith("."):
                 return
             if event.is_channel or event.is_group:
-                await self.process_message(event)
+                await self.process(event)
         asyncio.create_task(self.keep_alive())
-        logger.info(f"[{self.name}] جاهز (تأخير {DELAY_MIN}-{DELAY_MAX} ثانية)")
+        logger.info(f"[{self.name}] بدأ العمل (تأخير {DELAY_MIN}-{DELAY_MAX} ثانية)")
         await self.client.run_until_disconnected()
 
-# ========== الفئة الرئيسية (تدير الحسابات وأوامر الأدمن و VPS) ==========
+# ========== الكلاس الرئيسي ==========
 class OmegaFlawlessV5:
     def __init__(self):
         self.accounts = []
-        self.clients = []
-        self.stats = {
-            "vps": 0,
-            "wins": 0,
-            "joined_channels": 0,
-            "captcha_solved": 0,
-            "left": 0,
-            "start": time.time()
-        }
-        self.running = True
         self.main_client = None
-        self.config = {"delay_min": DELAY_MIN, "delay_max": DELAY_MAX}
+        self.stats = {"vps":0, "wins":0, "joined_channels":0, "captcha_solved":0, "left":0, "start":time.time()}
+        self.vps_active = True  # مراقبة VPS تعمل دائماً
 
-    async def init_account(self, api_id, api_hash, session_str, name, account_id):
-        if not api_id or not api_hash or not session_str:
+    async def init_account(self, api_id, api_hash, sess, name, aid):
+        if not api_id or not api_hash or not sess:
             return None
-        client = TelegramClient(StringSession(session_str), api_id, api_hash)
+        client = TelegramClient(StringSession(sess), api_id, api_hash)
         try:
             await client.connect()
             if not await client.is_user_authorized():
-                logger.error(f"{name} غير مصرح")
                 return None
-            handler = AccountHandler(client, name, account_id, self)
-            self.accounts.append(handler)
-            self.clients.append(client)
-            if account_id == 1:
+            acc = AccountHandler(client, name, aid, self)
+            self.accounts.append(acc)
+            if aid == 1:
                 self.main_client = client
-            logger.info(f"✅ {name} تم تهيئته")
-            return handler
+            logger.info(f"✅ {name} جاهز")
+            return acc
         except Exception as e:
-            logger.error(f"فشل تهيئة {name}: {e}")
+            logger.error(f"فشل {name}: {e}")
             return None
 
     async def start_all(self):
         await self.init_account(API_ID_1, API_HASH_1, SESSION_1, "الحساب_الأول", 1)
-        if API_ID_2 and SESSION_2:
+        if API_ID_2:
             await self.init_account(API_ID_2, API_HASH_2, SESSION_2, "الحساب_الثاني", 2)
-        if API_ID_3 and SESSION_3:
+        if API_ID_3:
             await self.init_account(API_ID_3, API_HASH_3, SESSION_3, "الحساب_الثالث", 3)
         if not self.accounts:
-            logger.critical("لا يوجد حسابات صالحة")
+            logger.critical("لا توجد حسابات صالحة")
             return
 
-        # مراقبة VPS (على الحساب الرئيسي)
+        # مراقبة VPS (دائماً نشطة)
         if VPS_CHANNEL_ID and self.main_client:
             @self.main_client.on(events.NewMessage(chats=VPS_CHANNEL_ID))
             async def vps_handler(event):
@@ -408,107 +344,162 @@ class OmegaFlawlessV5:
 
     # ---------- VPS ----------
     def extract_vps(self, text):
-        ip_match = re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b', text)
-        if not ip_match:
-            return None, None, None
-        ip = ip_match.group(1)
+        ipm = re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b', text)
+        if not ipm:
+            return None,None,None
+        ip = ipm.group(1)
         user = "root"
-        user_match = re.search(r'(?:User|Username|login)[\s:]*([a-zA-Z0-9_@.-]+)', text, re.I)
-        if user_match:
-            user = user_match.group(1)
-        pwd_match = re.search(r'(?:Password|Pass|New password)[\s:]*([^\s]+)', text, re.I)
-        pwd = pwd_match.group(1) if pwd_match else None
+        um = re.search(r'(?:User|Username|login)[\s:]*([a-zA-Z0-9_@.-]+)', text, re.I)
+        if um: user = um.group(1)
+        pm = re.search(r'(?:Password|Pass|New password)[\s:]*([^\s]+)', text, re.I)
+        pwd = pm.group(1) if pm else None
         if not pwd:
-            pwd_match2 = re.search(r'(?:^|\n)\s*([^\s]+@[^\s]+|[A-Za-z0-9!@#%^&*]+)\s*(?:\n|$)', text, re.MULTILINE)
-            if pwd_match2:
-                pwd = pwd_match2.group(1)
+            pm2 = re.search(r'(?:^|\n)\s*([^\s]+@[^\s]+|[A-Za-z0-9!@#%^&*]+)\s*(?:\n|$)', text, re.MULTILINE)
+            if pm2: pwd = pm2.group(1)
         return ip, user, pwd
 
-    async def change_vps_password(self, ip, user, old_pass):
-        if not SSH_AVAILABLE:
+    async def change_vps_pass(self, ip, user, old):
+        if not SSH_AVAILABLE or not AUTO_CHANGE_VPS_PASS:
             return
-        new_pass = self.generate_strong_password()
+        new = ''.join(random.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*') for _ in range(14))
         try:
             ssh = SSHClient()
             ssh.set_missing_host_key_policy(AutoAddPolicy())
-            ssh.connect(ip, username=user, password=old_pass, timeout=10)
-            command = f'echo "{user}:{new_pass}" | chpasswd'
-            stdin, stdout, stderr = ssh.exec_command(command)
-            err = stderr.read().decode()
-            if err:
-                logger.error(f"خطأ SSH {ip}: {err}")
-                return
+            ssh.connect(ip, username=user, password=old, timeout=10)
+            ssh.exec_command(f'echo "{user}:{new}" | chpasswd')
             ssh.close()
-            logger.info(f"🔐 تم تغيير كلمة {ip}")
-            msg = f"✅ **تم تغيير كلمة VPS**\n🌐 IP: `{ip}`\n👤 User: `{user}`\n🔑 New: `{new_pass}`"
-            await self.main_client.send_message(NOTIFY_USER, msg)
+            logger.info(f"🔐 تغيير كلمة {ip}")
+            await self.main_client.send_message(NOTIFY_USER, f"✅ **تم تغيير كلمة VPS**\n🌐 IP: `{ip}`\n👤 User: `{user}`\n🔑 New: `{new}`")
         except Exception as e:
             logger.error(f"SSH فشل {ip}: {e}")
 
-    def generate_strong_password(self, length=14):
-        chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
-        return ''.join(random.choice(chars) for _ in range(length))
-
     async def vps_watcher(self, event):
+        if not self.vps_active:
+            return
         text = event.raw_text or ""
-        ip, user, pwd = self.extract_vps(text)
-        if ip and pwd:
+        ip,u,p = self.extract_vps(text)
+        if ip and p:
             self.stats['vps'] += 1
-            msg = f"🔥 **VPS جديد**\n🌐 IP: `{ip}`\n👤 User: `{user}`\n🔑 Pass: `{pwd}`"
-            await self.main_client.send_message(NOTIFY_USER, msg)
+            await self.main_client.send_message(NOTIFY_USER, f"🔥 **VPS جديد**\n🌐 IP: `{ip}`\n👤 User: `{u}`\n🔑 Pass: `{p}`")
             logger.info(f"✅ VPS: {ip}")
-            if AUTO_CHANGE_VPS_PASS and SSH_AVAILABLE:
-                await self.change_vps_password(ip, user, pwd)
+            await self.change_vps_pass(ip, u, p)
 
     # ---------- إحصائيات وأوامر ----------
     async def live_stats(self):
         msg_id = None
-        while self.running:
-            uptime = str(timedelta(seconds=int(time.time() - self.stats['start'])))
-            msg = (
-                f"📊 **Flawless V5**\n"
-                f"🕒 {datetime.now():%H:%M:%S}\n"
-                f"⏱️ {uptime}\n"
-                f"🌐 VPS: {self.stats['vps']}\n"
-                f"🏆 فوز: {self.stats['wins']}\n"
-                f"📢 انضم: {self.stats['joined_channels']}\n"
-                f"🧩 كابتشا: {self.stats['captcha_solved']}\n"
-                f"🚪 مغادرة: {self.stats['left']}\n"
-                f"👥 حسابات: {len(self.accounts)}\n"
-                f"⏲️ تأخير: {DELAY_MIN}-{DELAY_MAX} ثانية"
-            )
+        while True:
+            uptime = str(timedelta(seconds=int(time.time()-self.stats['start'])))
+            msg = (f"📊 **Flawless V5**\n🕒 {datetime.now():%H:%M:%S}\n⏱️ {uptime}\n🌐 VPS: {self.stats['vps']}\n🏆 فوز: {self.stats['wins']}\n📢 انضم: {self.stats['joined_channels']}\n🧩 كابتشا: {self.stats['captcha_solved']}\n🚪 مغادرة: {self.stats['left']}\n👥 حسابات: {len(self.accounts)}\n⏲️ تأخير: {DELAY_MIN}-{DELAY_MAX} ثانية")
             if self.main_client:
                 try:
                     if msg_id:
                         await self.main_client.edit_message(NOTIFY_USER, msg_id, msg)
                     else:
-                        sent = await self.main_client.send_message(NOTIFY_USER, msg)
-                        msg_id = sent.id
+                        s = await self.main_client.send_message(NOTIFY_USER, msg)
+                        msg_id = s.id
                 except:
                     pass
-            await asyncio.sleep(10)
+            await asyncio.sleep(15)
 
     async def handle_command(self, event, parts):
         cmd = parts[0][1:].lower()
+        # إيقاف كلي
         if cmd == "stop":
-            self.running = False
             for acc in self.accounts:
                 acc.running = False
-            await event.reply("🛑 تم إيقاف جميع الحسابات")
+            await event.reply("🛑 تم إيقاف جميع الحسابات (مراقبة VPS ما زالت نشطة)")
+        # تشغيل كلي
         elif cmd == "start":
-            self.running = True
             for acc in self.accounts:
                 acc.running = True
             await event.reply("✅ تم تشغيل جميع الحسابات")
+        # إيقاف حساب فردي
+        elif cmd == "stop1":
+            if len(self.accounts) >= 1:
+                self.accounts[0].running = False
+                await event.reply("🛑 توقف الحساب الأول")
+            else:
+                await event.reply("لا يوجد حساب أول")
+        elif cmd == "stop2":
+            if len(self.accounts) >= 2:
+                self.accounts[1].running = False
+                await event.reply("🛑 توقف الحساب الثاني")
+            else:
+                await event.reply("لا يوجد حساب ثان")
+        elif cmd == "stop3":
+            if len(self.accounts) >= 3:
+                self.accounts[2].running = False
+                await event.reply("🛑 توقف الحساب الثالث")
+            else:
+                await event.reply("لا يوجد حساب ثالث")
+        # تشغيل فردي
+        elif cmd == "start1":
+            if len(self.accounts) >= 1:
+                self.accounts[0].running = True
+                await event.reply("✅ تشغيل الحساب الأول")
+        elif cmd == "start2":
+            if len(self.accounts) >= 2:
+                self.accounts[1].running = True
+                await event.reply("✅ تشغيل الحساب الثاني")
+        elif cmd == "start3":
+            if len(self.accounts) >= 3:
+                self.accounts[2].running = True
+                await event.reply("✅ تشغيل الحساب الثالث")
+        # حظر قناة
+        elif cmd == "block":
+            if len(parts) < 2:
+                await event.reply("الاستخدام: .block @username")
+                return
+            ch = parts[1].strip('@')
+            blocked = load_blocklist()
+            blocked.add(ch)
+            save_blocklist(blocked)
+            await event.reply(f"🚫 تم حظر القناة {ch} (لن يتم الانضمام إليها)")
+        # إلغاء حظر قناة
+        elif cmd == "unblock":
+            if len(parts) < 2:
+                await event.reply("الاستخدام: .unblock @username")
+                return
+            ch = parts[1].strip('@')
+            blocked = load_blocklist()
+            if ch in blocked:
+                blocked.remove(ch)
+                save_blocklist(blocked)
+                await event.reply(f"✅ تم إلغاء حظر {ch}")
+            else:
+                await event.reply(f"⚠️ {ch} غير محظورة")
+        # عرض القنوات المحظورة
+        elif cmd == "blocklist":
+            blocked = load_blocklist()
+            if blocked:
+                await event.reply(f"🚫 القنوات المحظورة:\n" + "\n".join(f"- @{b}" for b in blocked))
+            else:
+                await event.reply("لا توجد قنوات محظورة")
+        # الانضمام اليدوي لقناة
+        elif cmd == "join":
+            if len(parts) < 2:
+                await event.reply("الاستخدام: .join @username")
+                return
+            ch = parts[1].strip('@')
+            for acc in self.accounts:
+                try:
+                    entity = await acc.client.get_entity(ch)
+                    await acc.client(JoinChannelRequest(entity))
+                    await event.reply(f"✅ {acc.name} انضم إلى @{ch}")
+                    await asyncio.sleep(2)
+                except Exception as e:
+                    await event.reply(f"❌ {acc.name} فشل: {e}")
+        # إحصائيات سريعة
         elif cmd == "stats":
             await event.reply("📊 الإحصائيات تُرسل إلى الخاص")
+        # الإعدادات الحالية
         elif cmd == "config":
-            await event.reply(f"⚙️ الإعدادات:\nتأخير: {DELAY_MIN}-{DELAY_MAX} ثانية\nVPS: {'نشط' if VPS_CHANNEL_ID else 'غير نشط'}\nتغيير كلمة المرور: {AUTO_CHANGE_VPS_PASS}")
+            await event.reply(f"⚙️ الإعدادات:\nتأخير: {DELAY_MIN}-{DELAY_MAX} ثانية\nVPS قناة: {VPS_CHANNEL_ID}\nتغيير كلمة المرور: {AUTO_CHANGE_VPS_PASS}\nعدد الحسابات: {len(self.accounts)}")
         else:
-            await event.reply("أوامر متاحة:\n.start - تشغيل\n.stop - إيقاف\n.stats - إحصائيات\n.config - عرض الإعدادات")
+            await event.reply("أوامر متاحة:\n.start / .stop (كل الحسابات)\n.start1/stop1, .start2/stop2, .start3/stop3\n.block @channel / .unblock @channel / .blocklist\n.join @channel\n.stats\n.config")
 
     async def run(self):
-        logger.info("🚀 تشغيل Flawless V5 (بدون همسات، تأخير كبير)")
+        logger.info("بدء تشغيل Flawless V5 (بدون همسات، تأخير كبير، حظر القنوات)")
         await self.start_all()
 
 if __name__ == "__main__":
